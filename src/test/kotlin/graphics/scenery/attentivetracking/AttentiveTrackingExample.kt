@@ -1,4 +1,4 @@
-package graphics.scenery.tests.examples.advanced
+package graphics.scenery.attentivetracking
 
 import cleargl.GLVector
 import coremem.enums.NativeTypeEnum

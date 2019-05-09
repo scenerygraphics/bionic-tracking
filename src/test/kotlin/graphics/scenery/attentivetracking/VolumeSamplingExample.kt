@@ -1,6 +1,5 @@
-package graphics.scenery.tests.examples.advanced
+package graphics.scenery.attentivetracking
 
-import cleargl.GLTypeEnum
 import cleargl.GLVector
 import coremem.enums.NativeTypeEnum
 import graphics.scenery.*
@@ -8,14 +7,12 @@ import graphics.scenery.backends.Renderer
 import graphics.scenery.numerics.Random
 import graphics.scenery.utils.MaybeIntersects
 import graphics.scenery.utils.RingBuffer
-import graphics.scenery.volumes.TransferFunction
 import graphics.scenery.volumes.Volume
 import org.junit.Test
 import org.lwjgl.system.MemoryUtil.memAlloc
 import org.scijava.ui.behaviour.ClickBehaviour
 import java.nio.ByteBuffer
 import kotlin.concurrent.thread
-import kotlin.math.PI
 
 /**
  * Example that renders procedurally generated volumes and samples from it.
