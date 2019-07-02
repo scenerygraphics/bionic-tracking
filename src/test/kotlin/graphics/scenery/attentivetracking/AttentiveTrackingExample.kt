@@ -8,7 +8,6 @@ import graphics.scenery.controls.OpenVRHMD
 import graphics.scenery.controls.PupilEyeTracker
 import graphics.scenery.controls.TrackedDeviceType
 import graphics.scenery.numerics.Random
-import graphics.scenery.utils.MaybeIntersects
 import graphics.scenery.utils.RingBuffer
 import graphics.scenery.volumes.Volume
 import org.junit.Test
@@ -27,6 +26,9 @@ class AttentiveTrackingExample: SceneryBase("Attentive Tracking Example", 1280, 
     val pupilTracker = PupilEyeTracker(calibrationType = PupilEyeTracker.CalibrationType.ScreenSpace)
     val hmd = OpenVRHMD(seated = false, useCompositor = true)
     val referenceTarget = Icosphere(0.005f, 2)
+	val laser = Cylinder(0.005f, 0.2f, 10)
+
+	val confidenceThreshold = 0.60f
 
     override fun init() {
         hub.add(SceneryElement.HMDInput, hmd)
@@ -48,6 +50,10 @@ class AttentiveTrackingExample: SceneryBase("Attentive Tracking Example", 1280, 
         referenceTarget.material.metallic = 0.5f
         referenceTarget.material.diffuse = GLVector(0.8f, 0.8f, 0.8f)
         scene.addChild(referenceTarget)
+
+		laser.visible = false
+		laser.material.diffuse = GLVector(1.0f, 1.0f, 1.0f)
+		scene.addChild(laser)
 
         val shell = Box(GLVector(10.0f, 10.0f, 10.0f), insideNormals = true)
         shell.material.cullingMode = Material.CullingMode.None
@@ -82,15 +88,15 @@ class AttentiveTrackingExample: SceneryBase("Attentive Tracking Example", 1280, 
         val volume = Volume()
         volume.name = "volume"
         volume.position = GLVector(0.0f, 0.0f, 0.0f)
-        volume.colormap = "plasma"
-        volume.voxelSizeX = 10.0f
-        volume.voxelSizeY = 10.0f
-        volume.voxelSizeZ = 10.0f
+        volume.colormap = "viridis"
+        volume.voxelSizeX = 20.0f
+        volume.voxelSizeY = 20.0f
+        volume.voxelSizeZ = 20.0f
         with(volume.transferFunction) {
             addControlPoint(0.0f, 0.0f)
             addControlPoint(0.2f, 0.0f)
-            addControlPoint(0.4f, 1.0f)
-            addControlPoint(0.8f, 1.0f)
+            addControlPoint(0.4f, 0.5f)
+            addControlPoint(0.8f, 0.5f)
             addControlPoint(1.0f, 0.0f)
         }
 
@@ -107,7 +113,7 @@ class AttentiveTrackingExample: SceneryBase("Attentive Tracking Example", 1280, 
         lights.mapIndexed { i, light ->
             light.position = GLVector(2.0f * i - 4.0f,  i - 1.0f, 0.0f)
             light.emissionColor = GLVector(1.0f, 1.0f, 1.0f)
-            light.intensity = 50.0f
+            light.intensity = 0.8f
             scene.addChild(light)
         }
 
@@ -132,7 +138,6 @@ class AttentiveTrackingExample: SceneryBase("Attentive Tracking Example", 1280, 
 
             val seed = Random.randomFromRange(0.0f, 133333337.0f).toLong()
             var shift = GLVector.getNullVector(3)
-            val shiftDelta = Random.randomVectorFromRange(3, -1.5f, 1.5f)
 
             val dataType = if(bitsPerVoxel == 8) {
                 NativeTypeEnum.UnsignedByte
@@ -142,9 +147,10 @@ class AttentiveTrackingExample: SceneryBase("Attentive Tracking Example", 1280, 
 
             while(running) {
                 if(volume.metadata["animating"] == true) {
+					val shiftDelta = Random.randomVectorFromRange(3, -1.5f, 1.5f)
                     val currentBuffer = volumeBuffer.get()
 
-                    Volume.generateProceduralVolume(volumeSize, 0.05f, seed = seed,
+                    Volume.generateProceduralVolume(volumeSize, 0.01f, seed = seed,
                         intoBuffer = currentBuffer, shift = shift, use16bit = bitsPerVoxel > 8)
 
                     volume.readFromBuffer(
@@ -155,6 +161,7 @@ class AttentiveTrackingExample: SceneryBase("Attentive Tracking Example", 1280, 
                     shift = shift + shiftDelta
                 }
 
+				/*
                 val intersection = volume.intersectAABB(p1.position, (p2.position - p1.position).normalize())
                 if(intersection is MaybeIntersects.Intersection) {
                     val localEntry = (intersection.relativeEntry + GLVector.getOneVector(3)) * (1.0f/2.0f)
@@ -179,8 +186,9 @@ class AttentiveTrackingExample: SceneryBase("Attentive Tracking Example", 1280, 
                     diagram.addPoint(point)
                     connector.addChild(diagram)
                 }
+                */
 
-                Thread.sleep(200)
+                Thread.sleep(20)
             }
         }
     }
@@ -199,11 +207,7 @@ class AttentiveTrackingExample: SceneryBase("Attentive Tracking Example", 1280, 
             }
         }
 
-        val trigger = object: ClickBehaviour {
-            override fun click(p0: Int, p1: Int) {
-                logger.info("Trigger pushed, awesome!")
-            }
-        }
+        val trigger = ClickBehaviour { p0, p1 -> logger.info("Trigger pushed, awesome!") }
 
         hmd.addBehaviour("push_trigger", trigger)
         hmd.addKeyBinding("push_trigger", "T")
@@ -213,8 +217,9 @@ class AttentiveTrackingExample: SceneryBase("Attentive Tracking Example", 1280, 
     private fun setupCalibration() {
         val startCalibration = ClickBehaviour { _, _ ->
             thread {
-                val cam = scene.findObserver()
-                if (!pupilTracker.isCalibrated && cam != null) {
+                val cam = scene.findObserver() as? DetachedHeadCamera ?: return@thread
+				pupilTracker.gazeConfidenceThreshold = confidenceThreshold
+                if (!pupilTracker.isCalibrated) {
                     pupilTracker.onCalibrationFailed = {
                         for (i in 0 until 2) {
                             referenceTarget.material.diffuse = GLVector(1.0f, 0.0f, 0.0f)
@@ -241,29 +246,40 @@ class AttentiveTrackingExample: SceneryBase("Attentive Tracking Example", 1280, 
                     pupilTracker.onGazeReceived = when (pupilTracker.calibrationType) {
                         PupilEyeTracker.CalibrationType.ScreenSpace -> { gaze ->
                             when {
-                                gaze.confidence < 0.85f -> referenceTarget.material.diffuse = GLVector(0.8f, 0.0f, 0.0f)
+								gaze.confidence < confidenceThreshold -> referenceTarget.material.diffuse = GLVector(1.0f, 0.0f, 0.0f)
+                                gaze.confidence < 0.85f && gaze.confidence > confidenceThreshold -> referenceTarget.material.diffuse = GLVector(0.8f, 0.0f, 0.0f)
                                 gaze.confidence > 0.85f -> referenceTarget.material.diffuse = GLVector(0.0f, 0.5f, 0.5f)
                                 gaze.confidence > 0.95f -> referenceTarget.material.diffuse = GLVector(0.0f, 1.0f, 0.0f)
                             }
 
-                            if (gaze.confidence > 0.85f) {
+                            if (gaze.confidence > confidenceThreshold) {
                                 referenceTarget.visible = true
-                                referenceTarget.position = cam.viewportToWorld(
+								laser.visible = true
+                                val referencePosition = cam.viewportToWorld(
                                     GLVector(
                                         gaze.normalizedPosition().x() * 2.0f - 1.0f,
                                         gaze.normalizedPosition().y() * 2.0f - 1.0f),
                                     offset = 0.5f) + cam.forward * 0.15f
+
+								val headCenter = cam.viewportToWorld(GLVector(0.0f, 0.0f))
+
+								referenceTarget.position = referencePosition.clone()
+
+								val direction = (referencePosition - headCenter).normalize()
+
+								laser.orientBetweenPoints(headCenter, referencePosition, rescale = false, reposition = true)
                             }
                         }
 
                         PupilEyeTracker.CalibrationType.WorldSpace -> { gaze ->
                             when {
-                                gaze.confidence < 0.85f -> referenceTarget.material.diffuse = GLVector(0.8f, 0.0f, 0.0f)
+								gaze.confidence < confidenceThreshold -> referenceTarget.material.diffuse = GLVector(1.0f, 0.0f, 0.0f)
+                                gaze.confidence < 0.85f && gaze.confidence > confidenceThreshold -> referenceTarget.material.diffuse = GLVector(0.0f, 0.3f, 0.3f)
                                 gaze.confidence > 0.85f -> referenceTarget.material.diffuse = GLVector(0.0f, 0.5f, 0.5f)
                                 gaze.confidence > 0.95f -> referenceTarget.material.diffuse = GLVector(0.0f, 1.0f, 0.0f)
                             }
 
-                            if (gaze.confidence > 0.85f) {
+                            if (gaze.confidence > confidenceThreshold) {
                                 referenceTarget.visible = true
                                 referenceTarget.position = gaze.gazePoint()
                             }
