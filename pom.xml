@@ -15,7 +15,7 @@
         <dependency>
             <groupId>graphics.scenery</groupId>
             <artifactId>scenery</artifactId>
-            <version>21e8faba</version>
+            <version>21e8faba05</version>
         </dependency>
 
         <dependency>
@@ -66,11 +66,8 @@
 
 	<repositories>
 		<repository>
-			<id>jitpack</id>
+			<id>jitpack.io</id>
 			<url>https://jitpack.io</url>
-			<snapshots>
-				<enabled>false</enabled>
-			</snapshots>
 		</repository>
 	</repositories>
 
