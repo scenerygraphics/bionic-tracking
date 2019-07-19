@@ -1,6 +1,8 @@
 package graphics.scenery.attentivetracking
 
+import cleargl.GLTypeEnum
 import cleargl.GLVector
+import com.jogamp.opengl.math.Quaternion
 import graphics.scenery.*
 import graphics.scenery.backends.Renderer
 import graphics.scenery.backends.ShaderType
@@ -8,6 +10,7 @@ import graphics.scenery.controls.OpenVRHMD
 import graphics.scenery.controls.PupilEyeTracker
 import graphics.scenery.controls.TrackedDeviceType
 import graphics.scenery.utils.MaybeIntersects
+import graphics.scenery.utils.SystemHelpers
 import graphics.scenery.volumes.TransferFunction
 import graphics.scenery.volumes.Volume
 import org.junit.Test
@@ -15,9 +18,13 @@ import org.scijava.Context
 import org.scijava.ui.UIService
 import org.scijava.ui.behaviour.ClickBehaviour
 import org.scijava.widget.FileWidget
+import java.awt.image.DataBufferByte
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.nio.file.Paths
+import javax.imageio.ImageIO
 import kotlin.concurrent.thread
+import kotlin.math.PI
 
 /**
  * Example demonstrating attentive tracking, track objects by looking at them.
@@ -27,16 +34,16 @@ import kotlin.concurrent.thread
 class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 	val pupilTracker = PupilEyeTracker(calibrationType = PupilEyeTracker.CalibrationType.ScreenSpace, port = 52262)
 	val hmd = OpenVRHMD(seated = false, useCompositor = true)
-	val referenceTarget = Icosphere(0.005f, 2)
+	val referenceTarget = Icosphere(0.002f, 2)
 	val laser = Cylinder(0.005f, 0.2f, 10)
 
-	val hedgehog = Cylinder(0.005f, 1.0f, 3)
+	val hedgehog = Cylinder(0.001f, 1.0f, 16)
 	lateinit var volume: Volume
 
 	val confidenceThreshold = 0.60f
 
 	var tracking = false
-	var playing = true
+	var playing = false
 	var skipToNext = false
 	var skipToPrevious = false
 	var currentVolume = 0
@@ -87,12 +94,12 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 		laser.material.diffuse = GLVector(1.0f, 1.0f, 1.0f)
 		scene.addChild(laser)
 
-		val shell = Box(GLVector(10.0f, 10.0f, 10.0f), insideNormals = true)
+		val shell = Box(GLVector(20.0f, 20.0f, 20.0f), insideNormals = true)
 		shell.material.cullingMode = Material.CullingMode.None
 		shell.material.diffuse = GLVector(0.01f, 0.01f, 0.01f)
 		shell.material.specular = GLVector.getNullVector(3)
 		shell.material.ambient = GLVector.getNullVector(3)
-		shell.position = GLVector(0.0f, 4.0f, 0.0f)
+		shell.position = GLVector(0.0f, 0.0f, 0.0f)
 		scene.addChild(shell)
 
 
@@ -102,6 +109,7 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 		logger.info("Found volumes: ${volumes.joinToString(", ")}")
 
 		volume = Volume()
+		volume.metadata["volumesPerSecond"] = 8
 		volume.name = "volume"
 		volume.position = GLVector(0.0f, 1.0f, 0.0f)
 		volume.colormap = "jet"
@@ -124,22 +132,52 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 		hedgehog.instancedProperties["Metadata"] = { GLVector(0.0f, 0.0f, 0.0f, 0.0f) }
 		scene.addChild(hedgehog)
 
-		val lights = Light.createLightTetrahedron<PointLight>(GLVector(0.0f, 4.0f, 0.0f), spread = 8.0f, radius = 15.0f)
+
+		val eyeFrames = Mesh("eyeFrames")
+		val left = Box(GLVector(1.0f, 1.0f, 0.001f))
+		val right = Box(GLVector(1.0f, 1.0f, 0.001f))
+		left.position = GLVector(-1.0f, 1.5f, 0.0f)
+		left.rotation = left.rotation.rotateByAngleZ(PI.toFloat())
+		right.position = GLVector(1.0f, 1.5f, 0.0f)
+		eyeFrames.addChild(left)
+		eyeFrames.addChild(right)
+
+		scene.addChild(eyeFrames)
+
+		// limit frame rate for the frame publisher
+		val pupilFrameLimit = 20
+		var lastFrame = System.nanoTime()
+
+		pupilTracker.subscribeFrames { eye, texture ->
+			if(System.nanoTime() - lastFrame < pupilFrameLimit*10e5) {
+				return@subscribeFrames
+			}
+
+			val node = if(eye == 1) {
+				left
+			} else {
+				right
+			}
+
+			val stream = ByteArrayInputStream(texture)
+			val image = ImageIO.read(stream)
+			val data = (image.raster.dataBuffer as DataBufferByte).data
+
+			node.material.textures["diffuse"] = "fromBuffer:eye_$eye"
+			node.material.transferTextures["eye_$eye"] = GenericTexture(
+					"eye_${eye}_${System.currentTimeMillis()}",
+					GLVector(image.width.toFloat(), image.height.toFloat(), 1.0f),
+					3,
+					GLTypeEnum.UnsignedByte,
+					BufferUtils.allocateByteAndPut(data)
+			)
+			node.material.needsTextureReload = true
+
+			lastFrame = System.nanoTime()
+		}
+
+		val lights = Light.createLightTetrahedron<PointLight>(GLVector(0.0f, 0.0f, 0.0f), spread = 5.0f, radius = 15.0f, intensity = 5.0f)
 		lights.forEach { scene.addChild(it) }
-
-		fun nextVolume(): String {
-			val v = volumes[currentVolume % volumes.size]
-			currentVolume++
-
-			return v
-		}
-
-		fun previousVolume(): String {
-			val v = volumes[currentVolume % volumes.size]
-			currentVolume--
-
-			return v
-		}
 
 		thread {
 			while(!running) {
@@ -174,17 +212,34 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 						volume.readFrom(Paths.get(newVolume), replace = false)
 					}
 
+					if(hedgehog.visible) {
+						hedgehog.instances.forEach {
+							it.visible = (it.metadata["spine"] as SpineMetadata).timepoint == currentVolume
+						}
+					}
+
 					volume.trangemax = 1500.0f
 				}
 
-				Thread.sleep(250)
+				val sleepDuration = 1000L / (volume.metadata["volumesPerSecond"] as Int)
+				Thread.sleep(sleepDuration)
 			}
 		}
 	}
 
+	fun nextVolume(): String {
+		currentVolume = (currentVolume + 1) % volumes.size
+		return volumes[currentVolume]
+	}
+
+	fun previousVolume(): String {
+		currentVolume = (currentVolume - 1) % volumes.size
+		return volumes[currentVolume]
+	}
+
 	val messages = ArrayList<TextBoard>(5)
 
-	fun showMessage(message: String, scene: Scene, distance: Float = 0.5f, size: Float = 0.2f, duration: Int = 3000, color: GLVector = GLVector.getOneVector(3), background: GLVector = GLVector.getNullVector(3)) {
+	fun showMessage(message: String, scene: Scene, distance: Float = 1.5f, size: Float = 0.1f, duration: Int = 3000, color: GLVector = GLVector.getOneVector(3), background: GLVector = GLVector.getNullVector(3)) {
 		val cam = scene.findObserver() ?: return
 		val tb = TextBoard()
 		tb.fontColor = color
@@ -273,7 +328,11 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 						hmd.addKeyBinding("toggle_tracking", "T")
 
 						volume.visible = true
+						playing = true
 					}
+
+					pupilTracker.unsubscribeFrames()
+					scene.removeChild("eyeFrames")
 
 					logger.info("Starting eye tracker calibration")
 					showMessage("Starting calibration", scene, duration = 1500)
@@ -296,12 +355,12 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 								val headCenter = cam.viewportToWorld(GLVector(0.0f, 0.0f))
 								val direction = (referencePosition - headCenter).normalize()
 
-								referenceTarget.position = referencePosition.clone()
+								referenceTarget.position = referencePosition.clone() + direction * 0.3f
 
 //								laser.orientBetweenPoints(headCenter, referencePosition, rescale = false, reposition = true)
 
 								if(tracking) {
-									addSpine(headCenter, direction, volume, gaze.confidence, currentVolume.toFloat()/volumes.size.toFloat())
+									addSpine(headCenter, direction, volume, gaze.confidence, currentVolume)
 								}
 							}
 						}
@@ -331,16 +390,17 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 		hmd.addKeyBinding("start_calibration", "T")
 	}
 
-	fun addSpine(center: GLVector, direction: GLVector, volume: Volume, confidence: Float, timepoint: Float) {
+	fun addSpine(center: GLVector, direction: GLVector, volume: Volume, confidence: Float, timepoint: Int) {
+		val cam = scene.findObserver() as? DetachedHeadCamera ?: return
 		val sphere = volume.boundingBox?.getBoundingSphere() ?: return
 
 		val sphereDirection = (sphere.origin - center)
 		val sphereDist = sphereDirection.magnitude() - sphere.radius
 
-		val p1 = center + direction * sphereDist
-		val p2 = center + direction * (sphereDist + 2.2f * sphere.radius)
+		val p1 = center
+		val p2 = center + direction * (sphereDist + 2.0f * sphere.radius)
 
-		val spine = Cylinder.betweenPoints(p1, p2, 0.01f, segments = 3)
+		val spine = Cylinder.betweenPoints(p1, p2, 1.0f, segments = 1)
 		spine.visible = false
 
 		val intersection = volume.intersectAABB(p1, (p2 - p1).normalize())
@@ -353,36 +413,52 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 			val samples = volume.sampleRay(localEntry, localExit)
 
 			if (samples != null) {
-				spine.metadata["ray"] = samples.map { it ?: 0.0f }
-				spine.instancedProperties["ModelMatrix"] = { spine.world }
-				spine.instancedProperties["Metadata"] = { GLVector(confidence, timepoint, 0.0f, 0.0f) }
+				val metadata = SpineMetadata(
+						timepoint,
+						center,
+						direction,
+						localEntry,
+						localExit,
+						cam.headPosition,
+						cam.headOrientation,
+						cam.position,
+						confidence,
+						samples.map { it ?: 0.0f }
+				)
+				val count = samples.filterNotNull().count { it > 0.2f }
 
-				val count = samples.filterNotNull().count { it > 100.0f }
-				when {
-					count in 0 .. 10 -> spine.material.diffuse = GLVector(0.0f, 0.5f, 0.0f)
-					count in 11 .. 29 -> spine.material.diffuse = GLVector(0.0f, 0.8f, 0.0f)
-					count in 30 .. 50 -> spine.material.diffuse = GLVector(0.0f, 0.5f, 0.5f)
-					count in 50 .. 80 -> spine.material.diffuse = GLVector(0.0f, 1.0f, 1.0f)
-					count in 80 .. 100 -> spine.material.diffuse = GLVector(0.5f, 0.0f, 0.0f)
-					count > 100 -> spine.material.diffuse = GLVector(100.0f, 0.0f, 0.0f)
-				}
+				spine.metadata["spine"] = metadata
+				spine.instancedProperties["ModelMatrix"] = { spine.world }
+				spine.instancedProperties["Metadata"] = { GLVector(confidence, timepoint.toFloat()/volumes.size, count.toFloat(), 0.0f) }
 
 				hedgehog.instances.add(spine)
 			}
 		}
 	}
 
+	data class SpineMetadata(
+			val timepoint: Int,
+			val origin: GLVector,
+			val direction: GLVector,
+			val localEntry: GLVector,
+			val localExit: GLVector,
+			val headPosition: GLVector,
+			val headOrientation: Quaternion,
+			val position: GLVector,
+			val confidence: Float,
+			val samples: List<Float?>
+	)
+
 	fun dumpHedgehog() {
-		val f = File(System.getProperty("user.home") + "/Desktop/Hedgehog_${System.nanoTime()}.csv")
+		val f = File(System.getProperty("user.home") + "/Desktop/Hedgehog_${SystemHelpers.formatDateTime()}.csv")
 		val writer = f.bufferedWriter()
 		writer.write("Timepoint,Confidence,Samples\n")
 		hedgehog.instances.forEach { spine ->
-			val samples = spine.metadata["ray"] as? List<Float> ?: emptyList()
-			val metadata = spine.instancedProperties["Metadata"]?.invoke() as? GLVector ?: GLVector.getNullVector(4)
-			val confidence = metadata.x()
-			val timepoint = metadata.y()
+			val metadata = spine.metadata["spine"] as? SpineMetadata ?: return@forEach
+			val confidence = metadata.confidence
+			val timepoint = metadata.timepoint
 
-			writer.write("$timepoint,$confidence,${samples.joinToString(",")}\n")
+			writer.write("$timepoint,$confidence,${metadata.samples.joinToString(",")}\n")
 		}
 		writer.close()
 
