@@ -2,7 +2,6 @@ package graphics.scenery.attentivetracking
 
 import cleargl.GLTypeEnum
 import cleargl.GLVector
-import com.jogamp.opengl.math.Quaternion
 import graphics.scenery.*
 import graphics.scenery.backends.Renderer
 import graphics.scenery.backends.ShaderType
@@ -13,7 +12,6 @@ import graphics.scenery.utils.MaybeIntersects
 import graphics.scenery.utils.SystemHelpers
 import graphics.scenery.volumes.TransferFunction
 import graphics.scenery.volumes.Volume
-import org.junit.Test
 import org.scijava.Context
 import org.scijava.ui.UIService
 import org.scijava.ui.behaviour.ClickBehaviour
@@ -436,19 +434,6 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 		}
 	}
 
-	data class SpineMetadata(
-			val timepoint: Int,
-			val origin: GLVector,
-			val direction: GLVector,
-			val localEntry: GLVector,
-			val localExit: GLVector,
-			val headPosition: GLVector,
-			val headOrientation: Quaternion,
-			val position: GLVector,
-			val confidence: Float,
-			val samples: List<Float?>
-	)
-
 	fun dumpHedgehog() {
 		val f = File(System.getProperty("user.home") + "/Desktop/Hedgehog_${SystemHelpers.formatDateTime()}.csv")
 		val writer = f.bufferedWriter()
@@ -464,8 +449,8 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 
 		logger.info("Written hedgehog to ${f.absolutePath}")
 	}
+}
 
-	@Test override fun main() {
-		super.main()
-	}
+fun main(args: Array<String>) {
+	AttentiveTracking().main()
 }
