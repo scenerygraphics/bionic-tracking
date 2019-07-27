@@ -11,7 +11,7 @@ import java.io.File
  *
  * @author Ulrik Günther <hello@ulrik.is>
  */
-class HedgehogAnalysis(val csv: File) {
+class HedgehogAnalysis(val spines: List<SpineMetadata>) {
     val logger by LazyLogger()
 
     val timepoints = LinkedHashMap<Int, ArrayList<SpineMetadata>>()
@@ -28,34 +28,19 @@ class HedgehogAnalysis(val csv: File) {
     )
 
     init {
-        logger.info("Starting analysis with results from ${csv.absolutePath}")
+		logger.info("Starting analysis with ${spines.size} spines")
 
-        csv.readLines().drop(1).forEach { line ->
-            val tokens = line.split(",")
-            val timepoint = tokens[0].toInt()
-            val confidence = tokens[1].toFloat()
-            val samples = tokens.subList(2, tokens.size - 1).map { it.toFloat() }
-
-            val current = timepoints[timepoint]
-            val currentSpine = SpineMetadata(
-                    timepoint,
-                    GLVector.getNullVector(3),
-                    GLVector.getNullVector(3),
-                    GLVector.getNullVector(3),
-                    GLVector.getNullVector(3),
-                    GLVector.getNullVector(3),
-                    Quaternion(),
-                    GLVector.getNullVector(3),
-                    confidence,
-                    samples)
+		spines.forEach { spine ->
+			val timepoint = spine.timepoint
+			val current = timepoints[timepoint]
 
             if(current == null) {
-                timepoints[timepoint] = arrayListOf(currentSpine)
+                timepoints[timepoint] = arrayListOf(spine)
             } else {
-                current.add(currentSpine)
+                current.add(spine)
             }
 
-            avgConfidence += confidence
+            avgConfidence += spine.confidence
             totalSampleCount++
         }
 
@@ -96,6 +81,72 @@ class HedgehogAnalysis(val csv: File) {
 
         return Track(points, avgConfidence)
     }
+
+	companion object {
+		private val logger by LazyLogger()
+
+		fun fromIncompleteCSV(csv: File, separator: String = ","): HedgehogAnalysis {
+			logger.info("Loading spines from incomplete CSV at ${csv.absolutePath}")
+
+			val lines = csv.readLines()
+			val spines = ArrayList<SpineMetadata>(lines.size)
+
+			lines.drop(1).forEach { line ->
+				val tokens = line.split(separator)
+				val timepoint = tokens[0].toInt()
+				val confidence = tokens[1].toFloat()
+				val samples = tokens.subList(2, tokens.size - 1).map { it.toFloat() }
+
+				val currentSpine = SpineMetadata(
+						timepoint,
+						GLVector.getNullVector(3),
+						GLVector.getNullVector(3),
+						GLVector.getNullVector(3),
+						GLVector.getNullVector(3),
+						GLVector.getNullVector(3),
+						GLVector.getNullVector(3),
+						Quaternion(),
+						GLVector.getNullVector(3),
+						confidence,
+						samples)
+
+				spines.add(currentSpine)
+			}
+
+			return HedgehogAnalysis(spines)
+		}
+
+		fun fromCSV(csv: File, separator: String = ";"): HedgehogAnalysis {
+			logger.info("Loading spines from complete CSV at ${csv.absolutePath}")
+
+			val lines = csv.readLines()
+			val spines = ArrayList<SpineMetadata>(lines.size)
+
+			lines.drop(1).forEach { line ->
+				val tokens = line.split(separator)
+				val timepoint = tokens[0].toInt()
+				val confidence = tokens[1].toFloat()
+				val samples = tokens.subList(2, tokens.size - 1).map { it.toFloat() }
+
+				val currentSpine = SpineMetadata(
+						timepoint,
+						GLVector.getNullVector(3),
+						GLVector.getNullVector(3),
+						GLVector.getNullVector(3),
+						GLVector.getNullVector(3),
+						GLVector.getNullVector(3),
+						GLVector.getNullVector(3),
+						Quaternion(),
+						GLVector.getNullVector(3),
+						confidence,
+						samples)
+
+				spines.add(currentSpine)
+			}
+
+			return HedgehogAnalysis(spines)
+		}
+	}
 }
 
 fun main(args: Array<String>) {
@@ -106,7 +157,7 @@ fun main(args: Array<String>) {
     }
 
     val file = File(args[0])
-    val analysis = HedgehogAnalysis(file)
+    val analysis = HedgehogAnalysis.fromIncompleteCSV(file)
 
     val results = analysis.run()
     logger.info("Results: \n$results")

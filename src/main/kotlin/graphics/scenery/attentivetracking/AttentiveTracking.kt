@@ -408,15 +408,16 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 			val localEntry = (intersection.relativeEntry + GLVector.getOneVector(3)) * (1.0f / 2.0f)
 			val localExit = (intersection.relativeExit + GLVector.getOneVector(3)) * (1.0f / 2.0f)
 
-			val samples = volume.sampleRay(localEntry, localExit)
+			val (samples, localDirection) = volume.sampleRay(localEntry, localExit) ?: null to null
 
-			if (samples != null) {
+			if (samples != null && localDirection != null) {
 				val metadata = SpineMetadata(
 						timepoint,
 						center,
 						direction,
 						localEntry,
 						localExit,
+						localDirection,
 						cam.headPosition,
 						cam.headOrientation,
 						cam.position,
@@ -437,13 +438,12 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 	fun dumpHedgehog() {
 		val f = File(System.getProperty("user.home") + "/Desktop/Hedgehog_${SystemHelpers.formatDateTime()}.csv")
 		val writer = f.bufferedWriter()
-		writer.write("Timepoint,Confidence,Samples\n")
+		writer.write("Timepoint,Origin,Direction,LocalEntry,LocalExit,LocalDirection,HeadPosition,HeadOrientation,Position,Confidence,Samples\n")
+
 		hedgehog.instances.forEach { spine ->
 			val metadata = spine.metadata["spine"] as? SpineMetadata ?: return@forEach
-			val confidence = metadata.confidence
-			val timepoint = metadata.timepoint
 
-			writer.write("$timepoint,$confidence,${metadata.samples.joinToString(",")}\n")
+			writer.write("${metadata.timepoint};${metadata.origin};${metadata.direction};${metadata.localEntry};${metadata.localExit};${metadata.localDirection};${metadata.headPosition};${metadata.headOrientation};${metadata.position};${metadata.position};${metadata.confidence};${metadata.samples.joinToString(";")}")
 		}
 		writer.close()
 
