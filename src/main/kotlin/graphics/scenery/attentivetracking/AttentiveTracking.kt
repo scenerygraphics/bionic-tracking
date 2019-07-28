@@ -440,14 +440,28 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 		val writer = f.bufferedWriter()
 		writer.write("Timepoint,Origin,Direction,LocalEntry,LocalExit,LocalDirection,HeadPosition,HeadOrientation,Position,Confidence,Samples\n")
 
-		hedgehog.instances.forEach { spine ->
-			val metadata = spine.metadata["spine"] as? SpineMetadata ?: return@forEach
+		val spines = hedgehog.instances.map { spine ->
+			spine.metadata["spine"] as? SpineMetadata
+		}.filterNotNull()
 
+		spines.forEach { metadata ->
 			writer.write("${metadata.timepoint};${metadata.origin};${metadata.direction};${metadata.localEntry};${metadata.localExit};${metadata.localDirection};${metadata.headPosition};${metadata.headOrientation};${metadata.position};${metadata.position};${metadata.confidence};${metadata.samples.joinToString(";")}")
 		}
 		writer.close()
 
 		logger.info("Written hedgehog to ${f.absolutePath}")
+
+		val h = HedgehogAnalysis(spines)
+		val track = h.run()
+
+		logger.info("Track: ${track.points.joinToString(",")}")
+
+		track.points.forEach {
+			val p = Icosphere(0.001f, 2)
+			p.position = it
+
+			volume.addChild(p)
+		}
 	}
 }
 

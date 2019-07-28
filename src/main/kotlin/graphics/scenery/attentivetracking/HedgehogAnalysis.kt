@@ -61,8 +61,12 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>) {
             }
         }.filterNotNull()
 
+	data class SpineGraphVertex(val position: GLVector, val value: Float, val metadata : SpineMetadata)
+
     fun run(): Track {
         val startingThreshold = 0.125f
+		val localMaxThreshold = 0.01f
+
         val startingPoint = timepoints.entries.first { entry ->
             entry.value.any { metadata -> metadata.samples.filterNotNull().any { it > startingThreshold } }
         }
@@ -72,12 +76,40 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>) {
         val residual = timepoints.entries.drop(timepoints.entries.indexOf(startingPoint))
         logger.info("${residual.size} timepoints left")
 
-        residual.forEach {
-            it.value.forEachIndexed { i, spine ->
-                val max = localMaxima(spine.samples.filterNotNull())
-                logger.info("Local maxima at ${it.key}/$i are: ${max.joinToString(",")}")
+        val triples = residual.map {
+            it.value.mapIndexedNotNull { i, spine ->
+                val maxIndices = localMaxima(spine.samples.filterNotNull())
+                logger.info("Local maxima at ${it.key}/$i are: ${maxIndices.joinToString(",")}")
+
+				if(maxIndices.isNotEmpty()) {
+					maxIndices.map { index ->
+						SpineGraphVertex(spine.localEntry + spine.localDirection * index.first.toFloat(), index.second, spine)
+					}
+				} else {
+					null
+				}
             }
-        }
+        }.flatten()
+
+		// get the initial vertex, this one is assumed to always be in front, and have a local max
+		val initial = triples.first().first()
+		var current = initial
+
+		val shortestPath = triples.drop(1).mapIndexed { index, vertices ->
+			val distances = vertices
+					.filter { it.value > localMaxThreshold }
+					.map { vertex -> vertex to (current.position - vertex.position).magnitude() }
+					.sortedBy { it.second }
+
+			// select closest vertex
+			val closest = distances.firstOrNull()
+			if(closest != null) {
+				current = closest.first
+			}
+			current
+		}
+
+		points.addAll(shortestPath.map { it.position * 2.0f - GLVector.getOneVector(3) })
 
         return Track(points, avgConfidence)
     }
