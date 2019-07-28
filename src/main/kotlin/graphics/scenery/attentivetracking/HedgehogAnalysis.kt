@@ -116,6 +116,28 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>) {
 			return HedgehogAnalysis(spines)
 		}
 
+		private fun String.toGLVector(): GLVector {
+			val array = this
+					.trim()
+					.trimEnd()
+					.replace("[[", "").replace("]]", "")
+					.split(",")
+					.map { it.trim().trimEnd().toFloat() }.toFloatArray()
+
+			return GLVector(*array)
+		}
+
+		private fun String.toQuaternion(): Quaternion {
+			val array = this
+					.trim()
+					.trimEnd()
+					.replace("Quaternion[", "").replace("]", "")
+					.split(",")
+					.map { it.trim().trimEnd().replace("x ", "").replace("y ", "").replace("z ","").replace("w ", "").toFloat() }
+
+			return Quaternion(array[0], array[1], array[2], array[3])
+		}
+
 		fun fromCSV(csv: File, separator: String = ";"): HedgehogAnalysis {
 			logger.info("Loading spines from complete CSV at ${csv.absolutePath}")
 
@@ -125,19 +147,27 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>) {
 			lines.drop(1).forEach { line ->
 				val tokens = line.split(separator)
 				val timepoint = tokens[0].toInt()
-				val confidence = tokens[1].toFloat()
-				val samples = tokens.subList(2, tokens.size - 1).map { it.toFloat() }
+				val origin = tokens[1].toGLVector()
+				val direction = tokens[2].toGLVector()
+				val localEntry = tokens[3].toGLVector()
+				val localExit = tokens[4].toGLVector()
+				val localDirection = tokens[5].toGLVector()
+				val headPosition = tokens[6].toGLVector()
+				val headOrientation = tokens[7].toQuaternion()
+				val position = tokens[8].toGLVector()
+				val confidence = tokens[9].toFloat()
+				val samples = tokens.subList(10, tokens.size - 1).map { it.toFloat() }
 
 				val currentSpine = SpineMetadata(
 						timepoint,
-						GLVector.getNullVector(3),
-						GLVector.getNullVector(3),
-						GLVector.getNullVector(3),
-						GLVector.getNullVector(3),
-						GLVector.getNullVector(3),
-						GLVector.getNullVector(3),
-						Quaternion(),
-						GLVector.getNullVector(3),
+						origin,
+						direction,
+						localEntry,
+						localExit,
+						localDirection,
+						headPosition,
+						headOrientation,
+						position,
 						confidence,
 						samples)
 
