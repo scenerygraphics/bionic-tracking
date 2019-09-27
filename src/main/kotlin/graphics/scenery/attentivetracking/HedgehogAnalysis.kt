@@ -5,6 +5,7 @@ import com.jogamp.opengl.math.Quaternion
 import graphics.scenery.utils.LazyLogger
 import org.slf4j.LoggerFactory
 import java.io.File
+import kotlin.math.sqrt
 
 /**
  * <Description>
@@ -61,17 +62,30 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>) {
             }
         }.filterNotNull()
 
-	data class SpineGraphVertex(val position: GLVector, val value: Float, val metadata : SpineMetadata)
+	data class SpineGraphVertex(val position: GLVector, val value: Float, val metadata : SpineMetadata, var distance : Float? = null)
 
-    fun run(): Track {
+	fun GLVector.toQuaternion(forward: GLVector = GLVector(0.0f, 0.0f, -1.0f)): Quaternion {
+		val cross = forward.cross(this)
+		val q = Quaternion(cross.x(), cross.y(), cross.z(), this.times(forward))
+
+		val x = sqrt((q.w + sqrt(q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w)) / 2.0f)
+
+		return Quaternion(q.x/(2.0f * x), q.y/(2.0f * x), q.z/(2.0f * x), x)
+	}
+
+    fun run(): Track? {
         val startingThreshold = 0.125f
 		val localMaxThreshold = 0.01f
 
-        val startingPoint = timepoints.entries.first { entry ->
-            entry.value.any { metadata -> metadata.samples.filterNotNull().any { it > startingThreshold } }
-        }
+		if(timepoints.isEmpty()) {
+			return null
+		}
 
-        logger.info("Starting point is ${startingPoint.key}/${timepoints.size} (threshold=$startingThreshold)")
+        val startingPoint = timepoints.entries.firstOrNull { entry ->
+			entry.value.any { metadata -> metadata.samples.filterNotNull().any { it > startingThreshold } }
+		} ?: return null
+
+		logger.info("Starting point is ${startingPoint.key}/${timepoints.size} (threshold=$startingThreshold)")
 
         val residual = timepoints.entries.drop(timepoints.entries.indexOf(startingPoint))
         logger.info("${residual.size} timepoints left")
@@ -80,6 +94,12 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>) {
             it.value.mapIndexedNotNull { i, spine ->
                 val maxIndices = localMaxima(spine.samples.filterNotNull())
                 logger.info("Local maxima at ${it.key}/$i are: ${maxIndices.joinToString(",")}")
+
+				// compare gaze and head orientation
+
+//				if(spine.headOrientation.dot(spine.direction.toQuaternion()) > 0.0f) {
+//					return@mapIndexedNotNull null
+//				}
 
 				if(maxIndices.isNotEmpty()) {
 					maxIndices.map { index ->
@@ -98,16 +118,22 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>) {
 		val shortestPath = triples.drop(1).mapIndexed { index, vertices ->
 			val distances = vertices
 					.filter { it.value > localMaxThreshold }
-					.map { vertex -> vertex to (current.position - vertex.position).magnitude() }
-					.sortedBy { it.second }
+					.map { vertex ->
+						val distance = (current.position - vertex.position).magnitude()
+						vertex.distance = distance
+						vertex
+					}
+					.sortedBy { it.distance }
 
 			// select closest vertex
 			val closest = distances.firstOrNull()
 			if(closest != null) {
-				current = closest.first
+				current = closest
 			}
 			current
 		}
+
+		val avgPathLength = shortestPath.map { it.distance }.filterNotNull().average()
 
 		points.addAll(shortestPath.map { it.position * 2.0f - GLVector.getOneVector(3) })
 

@@ -8,6 +8,9 @@ import graphics.scenery.backends.ShaderType
 import graphics.scenery.controls.OpenVRHMD
 import graphics.scenery.controls.PupilEyeTracker
 import graphics.scenery.controls.TrackedDeviceType
+import graphics.scenery.controls.TrackerInput
+import graphics.scenery.controls.TrackerRole
+import graphics.scenery.utils.LazyLogger
 import graphics.scenery.utils.MaybeIntersects
 import graphics.scenery.utils.SystemHelpers
 import graphics.scenery.volumes.TransferFunction
@@ -35,16 +38,19 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 	val referenceTarget = Icosphere(0.002f, 2)
 	val laser = Cylinder(0.005f, 0.2f, 10)
 
-	val hedgehog = Cylinder(0.001f, 1.0f, 16)
+	val hedgehogs = Mesh()
 	lateinit var volume: Volume
 
 	val confidenceThreshold = 0.60f
 
 	var tracking = false
 	var playing = false
+	var delay = 125L
 	var skipToNext = false
 	var skipToPrevious = false
 	var currentVolume = 0
+
+	var volumeScaleFactor = 1.0f
 
 	lateinit var volumes: List<String>
 
@@ -107,7 +113,6 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 		logger.info("Found volumes: ${volumes.joinToString(", ")}")
 
 		volume = Volume()
-		volume.metadata["volumesPerSecond"] = 8
 		volume.name = "volume"
 		volume.position = GLVector(0.0f, 1.0f, 0.0f)
 		volume.colormap = "jet"
@@ -123,13 +128,7 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 		val bb = BoundingGrid()
 		bb.node = volume
 
-		hedgehog.visible = false
-		hedgehog.material = ShaderMaterial.fromClass(AttentiveTracking::class.java,
-				listOf(ShaderType.VertexShader, ShaderType.FragmentShader))
-		hedgehog.instancedProperties["ModelMatrix"] = { hedgehog.world }
-		hedgehog.instancedProperties["Metadata"] = { GLVector(0.0f, 0.0f, 0.0f, 0.0f) }
-		scene.addChild(hedgehog)
-
+		scene.addChild(hedgehogs)
 
 		val eyeFrames = Mesh("eyeFrames")
 		val left = Box(GLVector(1.0f, 1.0f, 0.001f))
@@ -210,63 +209,84 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 						volume.readFrom(Paths.get(newVolume), replace = false)
 					}
 
-					if(hedgehog.visible) {
-						hedgehog.instances.forEach {
-							it.visible = (it.metadata["spine"] as SpineMetadata).timepoint == currentVolume
+					if(hedgehogs.visible) {
+						hedgehogs.children.forEach { hedgehog ->
+							hedgehog.instances.forEach {
+								it.visible = (it.metadata["spine"] as SpineMetadata).timepoint == currentVolume
+							}
 						}
 					}
 
 					volume.trangemax = 1500.0f
 				}
 
-				val sleepDuration = 1000L / (volume.metadata["volumesPerSecond"] as Int)
-				Thread.sleep(sleepDuration)
+				Thread.sleep(delay)
 			}
 		}
 	}
 
+	fun addHedgehog(parent: Node) {
+		val hedgehog = Cylinder(0.005f, 1.0f, 16)
+		hedgehog.visible = false
+		hedgehog.material = ShaderMaterial.fromClass(AttentiveTracking::class.java,
+				listOf(ShaderType.VertexShader, ShaderType.FragmentShader))
+		hedgehog.instancedProperties["ModelMatrix"] = { hedgehog.world }
+		hedgehog.instancedProperties["Metadata"] = { GLVector(0.0f, 0.0f, 0.0f, 0.0f) }
+		parent.addChild(hedgehog)
+	}
+
 	fun nextVolume(): String {
 		currentVolume = (currentVolume + 1) % volumes.size
+		currentVolume = minOf(currentVolume, volumes.size)
 		return volumes[currentVolume]
 	}
 
 	fun previousVolume(): String {
 		currentVolume = (currentVolume - 1) % volumes.size
+		currentVolume = maxOf(0, currentVolume)
 		return volumes[currentVolume]
 	}
 
 	val messages = ArrayList<TextBoard>(5)
 
-	fun showMessage(message: String, scene: Scene, distance: Float = 1.5f, size: Float = 0.1f, duration: Int = 3000, color: GLVector = GLVector.getOneVector(3), background: GLVector = GLVector.getNullVector(3)) {
-		val cam = scene.findObserver() ?: return
+	fun showMessage(message: String, cam: Camera, distance: Float = 0.75f, size: Float = 0.05f, duration: Int = 3000, color: GLVector = GLVector.getOneVector(3), background: GLVector = GLVector.getNullVector(3)) {
 		val tb = TextBoard()
 		tb.fontColor = color
 		tb.backgroundColor = background
 		tb.text = message
 		tb.scale = GLVector(size, size, size)
-		tb.position = GLVector(0.0f, 1.5f, -distance)
+		tb.update.add {
+			tb.position = cam.viewportToWorld(GLVector(0.3f, 0.7f), 1.0f) + cam.forward * distance
+			if(cam is DetachedHeadCamera) {
+				tb.rotation = cam.headOrientation.conjugate().normalize()
+			} else {
+				tb.rotation = cam.rotation.conjugate().normalize()
+			}
+		}
 
-		messages.forEach { cam.removeChild(it) }
+		messages.forEach { cam.getScene()?.removeChild(it) }
 		messages.clear()
 
 		messages.add(tb)
-		cam.addChild(tb)
+		cam.getScene()?.addChild(tb)
 
 		thread {
 			Thread.sleep(duration.toLong())
 
-			cam.removeChild(tb)
+			cam.getScene()?.removeChild(tb)
 			messages.remove(tb)
 		}
 	}
 
 	override fun inputSetup() {
+		val cam = scene.findObserver() ?: throw IllegalStateException("Could not find camera")
+
 		inputHandler?.let { handler ->
 			hashMapOf(
-					"move_forward_fast" to "W",
-					"move_back_fast" to "S",
-					"move_left_fast" to "A",
-					"move_right_fast" to "D").forEach { name, key ->
+					"move_forward_fast" to "K",
+					"move_back_fast" to "J",
+					"move_left_fast" to "H",
+					"move_right_fast" to "L").forEach { (name, key) ->
 				handler.getBehaviour(name)?.let { b ->
 					hmd.addBehaviour(name, b)
 					hmd.addKeyBinding(name, key)
@@ -275,32 +295,130 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 		}
 
 		val toggleHedgehog = ClickBehaviour { _, _ ->
-			if(hedgehog.visible) {
-				showMessage("Hedgehog hidden", scene)
+			if(hedgehogs.visible) {
+				showMessage("Hedgehog hidden", cam)
 			} else {
-				showMessage("Hedgehog visible", scene)
+				showMessage("Hedgehog visible", cam)
 			}
-			hedgehog.visible = !hedgehog.visible
+			hedgehogs.visible = !hedgehogs.visible
 		}
 
 		hmd.addBehaviour("toggle_hedgehog", toggleHedgehog)
 		hmd.addKeyBinding("toggle_hedgehog", "X")
 
+		val nextTimepoint = ClickBehaviour { _, _ ->
+			skipToNext = true
+		}
+
+		val prevTimepoint = ClickBehaviour { _, _ ->
+			skipToPrevious = true
+		}
+
+		hmd.addBehaviour("skip_to_next", nextTimepoint)
+		hmd.addKeyBinding("skip_to_next", "D")
+		hmd.addBehaviour("skip_to_prev", prevTimepoint)
+		hmd.addKeyBinding("skip_to_prev", "A")
+
+		val scaleFactor = 1.2f
+		val fasterOrScale = ClickBehaviour { _, _ ->
+			if(playing) {
+				delay = minOf((delay / scaleFactor).toLong(), 2000L)
+				showMessage("Speed: ${String.format("%.2f", (1000f/delay.toFloat()))} vol/s", cam)
+			} else {
+				volumeScaleFactor = minOf(volumeScaleFactor * 1.2f, 3.0f)
+				volume.scale = GLVector.getOneVector(3) * volumeScaleFactor
+			}
+		}
+
+		hmd.addBehaviour("faster_or_scale", fasterOrScale)
+		hmd.addKeyBinding("faster_or_scale", "W")
+
+		val slowerOrScale = ClickBehaviour { _, _ ->
+			if(playing) {
+				delay = maxOf((delay * scaleFactor).toLong(), 5L)
+				showMessage("Speed: ${String.format("%.2f", (1000f/delay.toFloat()))} vol/s", cam)
+			} else {
+				volumeScaleFactor = maxOf(volumeScaleFactor / 1.2f, 0.1f)
+				volume.scale = GLVector.getOneVector(3) * volumeScaleFactor
+			}
+		}
+
+		hmd.addBehaviour("slower_or_scale", slowerOrScale)
+		hmd.addKeyBinding("slower_or_scale", "S")
+
+		val playPause = ClickBehaviour { _, _ ->
+			playing = !playing
+			if(playing) {
+				showMessage("Paused", cam)
+			} else {
+				showMessage("Playing", cam)
+			}
+		}
+
+		hmd.addBehaviour("play_pause", playPause)
+		hmd.addKeyBinding("play_pause", "M")
+
+		val move = ControllerDrag(TrackerRole.LeftHand, hmd) { volume }
+
+		hmd.addBehaviour("trigger_move", move)
+		hmd.addKeyBinding("trigger_move", "T")
+
+		hmd.allowRepeats += OpenVRHMD.OpenVRButton.Trigger to TrackerRole.LeftHand
+
 		setupCalibration()
 	}
 
-	private fun setupCalibration() {
+	class ControllerDrag(val handedness: TrackerRole, val hmd: OpenVRHMD, val draggedObjectFinder: () -> Node?): ClickBehaviour {
+		/**
+		 * A click occuered at the specified location, where click can mean a
+		 * regular mouse click or a typed key.
+		 *
+		 * @param x
+		 * mouse x.
+		 * @param y
+		 * mouse y.
+		 */
+		val logger by LazyLogger()
+		var lastPosition: GLVector? = null
+		// half a second of timeout
+		val timeout = 500000000
+
+		var lastTime = System.nanoTime()
+
+		override fun click(x : Int, y : Int) {
+			val currentTime = System.nanoTime()
+			if(currentTime - lastTime > timeout) {
+				lastPosition = null
+				lastTime = currentTime
+			}
+
+			val pose = hmd.getPose(TrackedDeviceType.Controller).find { it.role == handedness } ?: return
+			val last = lastPosition
+			val current = pose.position.clone()
+
+			if(last != null) {
+				val node = draggedObjectFinder.invoke() ?: return
+				node.position = node.position + (current - last)
+				logger.debug("Node ${node.name} moved with $current - $last!")
+			}
+
+			lastPosition = current
+		}
+	}
+
+
+	private fun setupCalibration(keybindingCalibration: String = "N", keybindingTracking: String = "U") {
 		val startCalibration = ClickBehaviour { _, _ ->
 			thread {
 				val cam = scene.findObserver() as? DetachedHeadCamera ?: return@thread
 				pupilTracker.gazeConfidenceThreshold = confidenceThreshold
 				if (!pupilTracker.isCalibrated) {
 					pupilTracker.onCalibrationFailed = {
-						showMessage("Calibration failed.", scene, background = GLVector(1.0f, 0.0f, 0.0f))
+						showMessage("Calibration failed.", cam, color = GLVector(1.0f, 0.0f, 0.0f))
 					}
 
 					pupilTracker.onCalibrationSuccess = {
-						showMessage("Calibration succeeded!", scene)
+						showMessage("Calibration succeeded!", cam, color = GLVector(0.0f, 1.0f, 0.0f))
 						for (i in 0 until 20) {
 							referenceTarget.material.diffuse = GLVector(0.0f, 1.0f, 0.0f)
 							Thread.sleep(100)
@@ -314,16 +432,17 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 						val toggleTracking = ClickBehaviour { _, _ ->
 							if(tracking) {
 								referenceTarget.material.diffuse = GLVector(0.5f, 0.5f, 0.5f)
-								showMessage("Tracking deactivated.", scene)
+								showMessage("Tracking deactivated.", cam)
 								dumpHedgehog()
 							} else {
+								addHedgehog(hedgehogs)
 								referenceTarget.material.diffuse = GLVector(1.0f, 0.0f, 0.0f)
-								showMessage("Tracking active.", scene)
+								showMessage("Tracking active.", cam)
 							}
 							tracking = !tracking
 						}
 						hmd.addBehaviour("toggle_tracking", toggleTracking)
-						hmd.addKeyBinding("toggle_tracking", "T")
+						hmd.addKeyBinding("toggle_tracking", keybindingTracking)
 
 						volume.visible = true
 						playing = true
@@ -333,7 +452,7 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 					scene.removeChild("eyeFrames")
 
 					logger.info("Starting eye tracker calibration")
-					showMessage("Starting calibration", scene, duration = 1500)
+					showMessage("Starting calibration", cam, duration = 1500)
 					pupilTracker.calibrate(cam, hmd,
 							generateReferenceData = true,
 							calibrationTarget = referenceTarget)
@@ -385,7 +504,7 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 
 		// bind calibration start to menu key on controller
 		hmd.addBehaviour("start_calibration", startCalibration)
-		hmd.addKeyBinding("start_calibration", "T")
+		hmd.addKeyBinding("start_calibration", keybindingCalibration)
 	}
 
 	fun addSpine(center: GLVector, direction: GLVector, volume: Volume, confidence: Float, timepoint: Int) {
@@ -430,7 +549,7 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 				spine.instancedProperties["ModelMatrix"] = { spine.world }
 				spine.instancedProperties["Metadata"] = { GLVector(confidence, timepoint.toFloat()/volumes.size, count.toFloat(), 0.0f) }
 
-				hedgehog.instances.add(spine)
+				hedgehogs.children.last().instances.add(spine)
 			}
 		}
 	}
@@ -440,9 +559,9 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 		val writer = f.bufferedWriter()
 		writer.write("Timepoint,Origin,Direction,LocalEntry,LocalExit,LocalDirection,HeadPosition,HeadOrientation,Position,Confidence,Samples\n")
 
-		val spines = hedgehog.instances.map { spine ->
+		val spines = hedgehogs.children.last().instances.mapNotNull { spine ->
 			spine.metadata["spine"] as? SpineMetadata
-		}.filterNotNull()
+		}
 
 		spines.forEach { metadata ->
 			writer.write("${metadata.timepoint};${metadata.origin};${metadata.direction};${metadata.localEntry};${metadata.localExit};${metadata.localDirection};${metadata.headPosition};${metadata.headOrientation};${metadata.position};${metadata.position};${metadata.confidence};${metadata.samples.joinToString(";")}")
@@ -454,14 +573,32 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 		val h = HedgehogAnalysis(spines)
 		val track = h.run()
 
+		if(track == null) {
+			logger.warn("No track returned")
+			scene.findObserver()?.let {
+				showMessage("No track returned", it, color = GLVector(1.0f, 0.0f, 0.0f))
+			}
+			return
+		}
+
 		logger.info("Track: ${track.points.joinToString(",")}")
 
-		track.points.forEach {
-			val p = Icosphere(0.001f, 2)
-			p.position = it
+		val master = Cylinder(0.005f, 1.0f, 10)
+		master.material = ShaderMaterial.fromFiles("DefaultDeferredInstanced.vert", "DefaultDeferred.frag")
+		master.material.diffuse = GLVector(1.0f, 1.0f, 1.0f)
+		master.material.roughness = 1.0f
+		master.material.metallic = 0.0f
+		master.instancedProperties["ModelMatrix"] = { master.world }
 
-			volume.addChild(p)
+		track.points.windowed(2, 1).forEach { pair ->
+			val element = Mesh()
+			element.orientBetweenPoints(pair[0], pair[1], rescale = true, reposition = true)
+			element.parent = volume
+			element.instancedProperties["ModelMatrix"] = { element.world }
+			master.instances.add(element)
 		}
+
+		volume.addChild(master)
 	}
 }
 
