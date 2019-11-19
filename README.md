@@ -1,6 +1,6 @@
-# Attentive Tracking
+# Bionic Tracking
 
-This is the demo repository for attentive tracking, aka, tracking by tracking.
+This is the demo repository for bionic tracking, aka, tracking by tracking, aka attentive tracking, aka track2track.
 
 ## Requirements
 
