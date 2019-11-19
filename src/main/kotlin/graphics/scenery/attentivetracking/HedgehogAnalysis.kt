@@ -16,7 +16,6 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>) {
     val logger by LazyLogger()
 
     val timepoints = LinkedHashMap<Int, ArrayList<SpineMetadata>>()
-    val points = ArrayList<GLVector>()
 
     var avgConfidence = 0.0f
         private set
@@ -24,7 +23,7 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>) {
         private set
 
     data class Track(
-            val points: ArrayList<GLVector>,
+            val points: List<Pair<GLVector, SpineGraphVertex>>,
             val confidence: Float
     )
 
@@ -62,7 +61,32 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>) {
             }
         }.filterNotNull()
 
-	data class SpineGraphVertex(val position: GLVector, val value: Float, val metadata : SpineMetadata, var distance : Float? = null)
+	data class SpineGraphVertex(val timepoint: Int,
+								val position: GLVector,
+								val worldPosition: GLVector,
+								val value: Float,
+								val metadata : SpineMetadata,
+								var previous: SpineGraphVertex? = null,
+								var next: SpineGraphVertex? = null) {
+
+		fun distance(): Float {
+			val prev = previous
+			return if(prev != null) {
+				(prev.worldPosition - this.worldPosition).magnitude()
+			} else {
+				0.0f
+			}
+		}
+
+		fun drop() {
+			previous?.next = next
+			next?.previous = previous
+		}
+
+		override fun toString() : String {
+			return "SpineGraphVertex for t=$timepoint, pos=$position, worldPos=$worldPosition, value=$value ($metadata)"
+		}
+	}
 
 	fun GLVector.toQuaternion(forward: GLVector = GLVector(0.0f, 0.0f, -1.0f)): Quaternion {
 		val cross = forward.cross(this)
@@ -74,7 +98,7 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>) {
 	}
 
     fun run(): Track? {
-        val startingThreshold = 0.125f
+        val startingThreshold = 0.02f
 		val localMaxThreshold = 0.01f
 
 		if(timepoints.isEmpty()) {
@@ -87,13 +111,17 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>) {
 
 		logger.info("Starting point is ${startingPoint.key}/${timepoints.size} (threshold=$startingThreshold)")
 
-        val residual = timepoints.entries.drop(timepoints.entries.indexOf(startingPoint))
-        logger.info("${residual.size} timepoints left")
+//        val remainingTimepoints = timepoints.entries.drop(timepoints.entries.indexOf(startingPoint))
 
-        val triples = residual.map {
-            it.value.mapIndexedNotNull { i, spine ->
+		timepoints.filter { it.key < startingPoint.key }
+				.forEach { timepoints.remove(it.key) }
+
+		logger.info("${timepoints.size} timepoints left")
+
+		val candidates = timepoints.map { tp ->
+            val vs = tp.value.mapIndexedNotNull { i, spine ->
                 val maxIndices = localMaxima(spine.samples.filterNotNull())
-                logger.info("Local maxima at ${it.key}/$i are: ${maxIndices.joinToString(",")}")
+                logger.info("Local maxima at ${tp.key}/$i are: ${maxIndices.joinToString(",")}")
 
 				// compare gaze and head orientation
 
@@ -103,41 +131,76 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>) {
 
 				if(maxIndices.isNotEmpty()) {
 					maxIndices.map { index ->
-						SpineGraphVertex(spine.localEntry + spine.localDirection * index.first.toFloat(), index.second, spine)
+						val worldPosition = spine.position + spine.direction * spine.distance
+						SpineGraphVertex(tp.key,
+								spine.localEntry + spine.localDirection * index.first.toFloat(),
+								worldPosition,
+								index.second,
+								spine)
 					}
 				} else {
 					null
 				}
             }
+			vs
         }.flatten()
 
+
 		// get the initial vertex, this one is assumed to always be in front, and have a local max
-		val initial = triples.first().first()
+		val initial = candidates.first().first()
 		var current = initial
 
-		val shortestPath = triples.drop(1).mapIndexed { index, vertices ->
-			val distances = vertices
+		var shortestPath = candidates.drop(1).mapIndexedNotNull { time, vs ->
+			val distances = vs
 					.filter { it.value > localMaxThreshold }
 					.map { vertex ->
-						val distance = (current.position - vertex.position).magnitude()
-						vertex.distance = distance
-						vertex
+						val distance = (current.worldPosition - vertex.worldPosition).magnitude()
+						vertex to distance
 					}
-					.sortedBy { it.distance }
+					.sortedBy { it.second }
+
+			logger.info("Minimum distance for t=$time d=${distances.firstOrNull()?.second}")
 
 			// select closest vertex
-			val closest = distances.firstOrNull()
+			val closest = distances.firstOrNull()?.first
 			if(closest != null) {
+				current.next = closest
+				closest.previous = current
 				current = closest
+				current
+			} else {
+				null
 			}
-			current
 		}
 
-		val avgPathLength = shortestPath.map { it.distance }.filterNotNull().average()
+		shortestPath.windowed(3, 1).forEach {
+			it[1].previous = it[0]
+			it[1].next = it[2]
+		}
 
-		points.addAll(shortestPath.map { it.position * 2.0f - GLVector.getOneVector(3) })
+		val avgPathLength = shortestPath.map { it.distance() }.average().toFloat()
+		logger.info("Average path length=$avgPathLength")
 
-        return Track(points, avgConfidence)
+		val beforeCount = shortestPath.size
+		while(shortestPath.any { it.distance() >= 2.0f * avgPathLength }) {
+			shortestPath.filter { it.distance() >= 2.0f * avgPathLength }.forEach { it.drop() }
+			shortestPath = shortestPath.filter { it.distance() < 2.0f * avgPathLength }
+		}
+		val afterCount = shortestPath.size
+		logger.info("Pruned ${beforeCount - afterCount} vertices due to path length")
+		logger.info("Final distances: ${shortestPath.joinToString { "d = ${it.distance()}" }}")
+
+		val singlePoints = shortestPath
+				.groupBy { it.timepoint }
+				.mapNotNull { vs -> vs.value.maxBy { it.metadata.confidence } }
+				.filter {
+					it.metadata.direction.times(it.previous!!.metadata.direction) > 0.85f
+				}
+
+
+		logger.info("Returning ${singlePoints.size} points")
+
+        return Track(singlePoints.map { it.position * 2.0f - GLVector.getOneVector(3) to it }, avgConfidence)
     }
 
 	companion object {
@@ -159,6 +222,7 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>) {
 						timepoint,
 						GLVector.getNullVector(3),
 						GLVector.getNullVector(3),
+						0.0f,
 						GLVector.getNullVector(3),
 						GLVector.getNullVector(3),
 						GLVector.getNullVector(3),
@@ -220,6 +284,7 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>) {
 						timepoint,
 						origin,
 						direction,
+						0.0f,
 						localEntry,
 						localExit,
 						localDirection,

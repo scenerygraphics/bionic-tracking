@@ -10,6 +10,7 @@ data class SpineMetadata(
         val timepoint: Int,
         val origin: GLVector,
         val direction: GLVector,
+		val distance: Float,
         val localEntry: GLVector,
         val localExit: GLVector,
 		val localDirection: GLVector,
