@@ -10,6 +10,7 @@ import graphics.scenery.controls.PupilEyeTracker
 import graphics.scenery.controls.TrackedDeviceType
 import graphics.scenery.controls.TrackerInput
 import graphics.scenery.controls.TrackerRole
+import graphics.scenery.numerics.Random
 import graphics.scenery.utils.LazyLogger
 import graphics.scenery.utils.MaybeIntersects
 import graphics.scenery.utils.SystemHelpers
@@ -249,35 +250,6 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 
 	val messages = ArrayList<TextBoard>(5)
 
-	fun showMessage(message: String, cam: Camera, distance: Float = 0.75f, size: Float = 0.05f, duration: Int = 3000, color: GLVector = GLVector.getOneVector(3), background: GLVector = GLVector.getNullVector(3)) {
-		val tb = TextBoard()
-		tb.fontColor = color
-		tb.backgroundColor = background
-		tb.text = message
-		tb.scale = GLVector(size, size, size)
-		tb.update.add {
-			tb.position = cam.viewportToWorld(GLVector(0.3f, 0.7f), 1.0f) + cam.forward * distance
-			if(cam is DetachedHeadCamera) {
-				tb.rotation = cam.headOrientation.conjugate().normalize()
-			} else {
-				tb.rotation = cam.rotation.conjugate().normalize()
-			}
-		}
-
-		messages.forEach { cam.getScene()?.removeChild(it) }
-		messages.clear()
-
-		messages.add(tb)
-		cam.getScene()?.addChild(tb)
-
-		thread {
-			Thread.sleep(duration.toLong())
-
-			cam.getScene()?.removeChild(tb)
-			messages.remove(tb)
-		}
-	}
-
 	override fun inputSetup() {
 		val cam = scene.findObserver() ?: throw IllegalStateException("Could not find camera")
 
@@ -296,9 +268,9 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 
 		val toggleHedgehog = ClickBehaviour { _, _ ->
 			if(hedgehogs.visible) {
-				showMessage("Hedgehog hidden", cam)
+				cam.showMessage("Hedgehog hidden")
 			} else {
-				showMessage("Hedgehog visible", cam)
+				cam.showMessage("Hedgehog visible")
 			}
 			hedgehogs.visible = !hedgehogs.visible
 		}
@@ -323,7 +295,7 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 		val fasterOrScale = ClickBehaviour { _, _ ->
 			if(playing) {
 				delay = minOf((delay / scaleFactor).toLong(), 2000L)
-				showMessage("Speed: ${String.format("%.2f", (1000f/delay.toFloat()))} vol/s", cam)
+				cam.showMessage("Speed: ${String.format("%.2f", (1000f/delay.toFloat()))} vol/s")
 			} else {
 				volumeScaleFactor = minOf(volumeScaleFactor * 1.2f, 3.0f)
 				volume.scale = GLVector.getOneVector(3) * volumeScaleFactor
@@ -336,7 +308,7 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 		val slowerOrScale = ClickBehaviour { _, _ ->
 			if(playing) {
 				delay = maxOf((delay * scaleFactor).toLong(), 5L)
-				showMessage("Speed: ${String.format("%.2f", (1000f/delay.toFloat()))} vol/s", cam)
+				cam.showMessage("Speed: ${String.format("%.2f", (1000f/delay.toFloat()))} vol/s")
 			} else {
 				volumeScaleFactor = maxOf(volumeScaleFactor / 1.2f, 0.1f)
 				volume.scale = GLVector.getOneVector(3) * volumeScaleFactor
@@ -349,9 +321,9 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 		val playPause = ClickBehaviour { _, _ ->
 			playing = !playing
 			if(playing) {
-				showMessage("Paused", cam)
+				cam.showMessage("Playing")
 			} else {
-				showMessage("Playing", cam)
+				cam.showMessage("Paused")
 			}
 		}
 
@@ -414,11 +386,11 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 				pupilTracker.gazeConfidenceThreshold = confidenceThreshold
 				if (!pupilTracker.isCalibrated) {
 					pupilTracker.onCalibrationFailed = {
-						showMessage("Calibration failed.", cam, color = GLVector(1.0f, 0.0f, 0.0f))
+						cam.showMessage("Calibration failed.", messageColor = GLVector(1.0f, 0.0f, 0.0f))
 					}
 
 					pupilTracker.onCalibrationSuccess = {
-						showMessage("Calibration succeeded!", cam, color = GLVector(0.0f, 1.0f, 0.0f))
+						cam.showMessage("Calibration succeeded!", messageColor = GLVector(0.0f, 1.0f, 0.0f))
 						for (i in 0 until 20) {
 							referenceTarget.material.diffuse = GLVector(0.0f, 1.0f, 0.0f)
 							Thread.sleep(100)
@@ -432,12 +404,12 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 						val toggleTracking = ClickBehaviour { _, _ ->
 							if(tracking) {
 								referenceTarget.material.diffuse = GLVector(0.5f, 0.5f, 0.5f)
-								showMessage("Tracking deactivated.", cam)
+								cam.showMessage("Tracking deactivated.")
 								dumpHedgehog()
 							} else {
 								addHedgehog(hedgehogs)
 								referenceTarget.material.diffuse = GLVector(1.0f, 0.0f, 0.0f)
-								showMessage("Tracking active.", cam)
+								cam.showMessage("Tracking active.")
 							}
 							tracking = !tracking
 						}
@@ -452,7 +424,7 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 					scene.removeChild("eyeFrames")
 
 					logger.info("Starting eye tracker calibration")
-					showMessage("Starting calibration", cam, duration = 1500)
+					cam.showMessage("Look at the dot", duration = 1500)
 					pupilTracker.calibrate(cam, hmd,
 							generateReferenceData = true,
 							calibrationTarget = referenceTarget)
@@ -534,6 +506,7 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 						timepoint,
 						center,
 						direction,
+						intersection.distance,
 						localEntry,
 						localExit,
 						localDirection,
@@ -575,24 +548,23 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 
 		if(track == null) {
 			logger.warn("No track returned")
-			scene.findObserver()?.let {
-				showMessage("No track returned", it, color = GLVector(1.0f, 0.0f, 0.0f))
-			}
+			scene.findObserver()?.showMessage("No track returned", messageColor = GLVector(1.0f, 0.0f, 0.0f))
 			return
 		}
 
-		logger.info("Track: ${track.points.joinToString(",")}")
+		logger.info("---\nTrack: ${track.points.joinToString("\n")}\n---")
 
 		val master = Cylinder(0.005f, 1.0f, 10)
 		master.material = ShaderMaterial.fromFiles("DefaultDeferredInstanced.vert", "DefaultDeferred.frag")
-		master.material.diffuse = GLVector(1.0f, 1.0f, 1.0f)
+		master.material.diffuse = Random.randomVectorFromRange(3, 0.2f, 0.8f)
 		master.material.roughness = 1.0f
 		master.material.metallic = 0.0f
+		master.material.cullingMode = Material.CullingMode.None
 		master.instancedProperties["ModelMatrix"] = { master.world }
 
 		track.points.windowed(2, 1).forEach { pair ->
 			val element = Mesh()
-			element.orientBetweenPoints(pair[0], pair[1], rescale = true, reposition = true)
+			element.orientBetweenPoints(pair[0].first, pair[1].first, rescale = true, reposition = true)
 			element.parent = volume
 			element.instancedProperties["ModelMatrix"] = { element.world }
 			master.instances.add(element)
