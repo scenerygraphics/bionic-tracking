@@ -1,4 +1,4 @@
-package graphics.scenery.attentivetracking
+package graphics.scenery.bionictracking
 
 import cleargl.GLTypeEnum
 import cleargl.GLVector
@@ -29,11 +29,11 @@ import kotlin.concurrent.thread
 import kotlin.math.PI
 
 /**
- * Example demonstrating attentive tracking, track objects by looking at them.
+ * Example demonstrating bionic tracking, track objects by looking at them.
  *
  * @author Ulrik Günther <hello@ulrik.is>
  */
-class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
+class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 	val pupilTracker = PupilEyeTracker(calibrationType = PupilEyeTracker.CalibrationType.ScreenSpace, port = 52262)
 	val hmd = OpenVRHMD(seated = false, useCompositor = true)
 	val referenceTarget = Icosphere(0.002f, 2)
@@ -229,7 +229,7 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 	fun addHedgehog(parent: Node) {
 		val hedgehog = Cylinder(0.005f, 1.0f, 16)
 		hedgehog.visible = false
-		hedgehog.material = ShaderMaterial.fromClass(AttentiveTracking::class.java,
+		hedgehog.material = ShaderMaterial.fromClass(BionicTracking::class.java,
 				listOf(ShaderType.VertexShader, ShaderType.FragmentShader))
 		hedgehog.instancedProperties["ModelMatrix"] = { hedgehog.world }
 		hedgehog.instancedProperties["Metadata"] = { GLVector(0.0f, 0.0f, 0.0f, 0.0f) }
@@ -575,5 +575,5 @@ class AttentiveTracking: SceneryBase("Attentive Tracking Example", 1280, 720) {
 }
 
 fun main(args: Array<String>) {
-	AttentiveTracking().main()
+	BionicTracking().main()
 }

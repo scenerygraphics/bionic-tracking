@@ -1,4 +1,4 @@
-package graphics.scenery.attentivetracking
+package graphics.scenery.bionictracking
 
 import cleargl.GLVector
 import com.jogamp.opengl.math.Quaternion
