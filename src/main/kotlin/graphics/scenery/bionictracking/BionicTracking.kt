@@ -34,7 +34,7 @@ import kotlin.math.PI
  * @author Ulrik Günther <hello@ulrik.is>
  */
 class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
-	val pupilTracker = PupilEyeTracker(calibrationType = PupilEyeTracker.CalibrationType.ScreenSpace, port = 52262)
+	val pupilTracker = PupilEyeTracker(calibrationType = PupilEyeTracker.CalibrationType.WorldSpace, port = System.getProperty("PupilPort", "50020").toInt())
 	val hmd = OpenVRHMD(seated = false, useCompositor = true)
 	val referenceTarget = Icosphere(0.002f, 2)
 	val laser = Cylinder(0.005f, 0.2f, 10)
@@ -423,6 +423,18 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 					pupilTracker.unsubscribeFrames()
 					scene.removeChild("eyeFrames")
 
+//					if(pupilTracker.calibrationType == PupilEyeTracker.CalibrationType.WorldSpace) {
+//						referenceTarget.update.add {
+//							if(cam is DetachedHeadCamera) {
+////								referenceTarget.position = cam.headPosition + referenceTarget.position
+//								referenceTarget.rotation = cam.headOrientation.conjugate().normalize()
+//							} else {
+////								referenceTarget.position = cam.position + referenceTarget.position
+//								referenceTarget.rotation = cam.rotation.conjugate().normalize()
+//							}
+//						}
+//					}
+
 					logger.info("Starting eye tracker calibration")
 					cam.showMessage("Look at the dot", duration = 1500)
 					pupilTracker.calibrate(cam, hmd,
@@ -431,6 +443,7 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 
 					pupilTracker.onGazeReceived = when (pupilTracker.calibrationType) {
 						PupilEyeTracker.CalibrationType.ScreenSpace -> { gaze ->
+							logger.info("Received gaze: $gaze")
 							if (gaze.confidence > confidenceThreshold) {
 								referenceTarget.visible = true
 //								laser.visible = true
@@ -455,6 +468,7 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 						}
 
 						PupilEyeTracker.CalibrationType.WorldSpace -> { gaze ->
+							logger.info("Received gaze: $gaze")
 							when {
 								gaze.confidence < confidenceThreshold -> referenceTarget.material.diffuse = GLVector(1.0f, 0.0f, 0.0f)
 								gaze.confidence < 0.85f && gaze.confidence > confidenceThreshold -> referenceTarget.material.diffuse = GLVector(0.0f, 0.3f, 0.3f)
@@ -464,7 +478,7 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 
 							if (gaze.confidence > confidenceThreshold) {
 								referenceTarget.visible = true
-								referenceTarget.position = gaze.gazePoint()
+								referenceTarget.position = cam.headPosition + gaze.gazePoint()
 							}
 						}
 					}
