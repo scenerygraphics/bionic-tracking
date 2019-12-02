@@ -6,9 +6,8 @@ import graphics.scenery.*
 import graphics.scenery.backends.Renderer
 import graphics.scenery.backends.ShaderType
 import graphics.scenery.controls.OpenVRHMD
-import graphics.scenery.controls.PupilEyeTracker
+import graphics.scenery.controls.eyetracking.PupilEyeTracker
 import graphics.scenery.controls.TrackedDeviceType
-import graphics.scenery.controls.TrackerInput
 import graphics.scenery.controls.TrackerRole
 import graphics.scenery.numerics.Random
 import graphics.scenery.utils.LazyLogger
@@ -36,7 +35,7 @@ import kotlin.math.PI
 class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 	val pupilTracker = PupilEyeTracker(calibrationType = PupilEyeTracker.CalibrationType.WorldSpace, port = System.getProperty("PupilPort", "50020").toInt())
 	val hmd = OpenVRHMD(seated = false, useCompositor = true)
-	val referenceTarget = Icosphere(0.002f, 2)
+	val referenceTarget = Icosphere(0.02f, 2)
 	val laser = Cylinder(0.005f, 0.2f, 10)
 
 	val hedgehogs = Mesh()
@@ -93,7 +92,7 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 		referenceTarget.material.roughness = 1.0f
 		referenceTarget.material.metallic = 0.0f
 		referenceTarget.material.diffuse = GLVector(0.8f, 0.8f, 0.8f)
-		scene.addChild(referenceTarget)
+		cam.addChild(referenceTarget)
 
 		laser.visible = false
 		laser.material.diffuse = GLVector(1.0f, 1.0f, 1.0f)
@@ -173,6 +172,14 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 
 			lastFrame = System.nanoTime()
 		}
+
+		val debugBoard = TextBoard()
+		debugBoard.name = "debugBoard"
+		debugBoard.scale = GLVector(0.05f, 0.05f, 0.05f)
+		debugBoard.position = GLVector(0.0f, -0.3f, -0.9f)
+		debugBoard.text = ""
+		debugBoard.visible = false
+		cam.addChild(debugBoard)
 
 		val lights = Light.createLightTetrahedron<PointLight>(GLVector(0.0f, 0.0f, 0.0f), spread = 5.0f, radius = 15.0f, intensity = 5.0f)
 		lights.forEach { scene.addChild(it) }
@@ -391,6 +398,8 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 
 					pupilTracker.onCalibrationSuccess = {
 						cam.showMessage("Calibration succeeded!", messageColor = GLVector(0.0f, 1.0f, 0.0f))
+						cam.children.find { it.name == "debugBoard" }?.visible = true
+
 						for (i in 0 until 20) {
 							referenceTarget.material.diffuse = GLVector(0.0f, 1.0f, 0.0f)
 							Thread.sleep(100)
@@ -468,7 +477,7 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 						}
 
 						PupilEyeTracker.CalibrationType.WorldSpace -> { gaze ->
-							logger.info("Received gaze: $gaze")
+//							logger.info("Received gaze: $gaze")
 							when {
 								gaze.confidence < confidenceThreshold -> referenceTarget.material.diffuse = GLVector(1.0f, 0.0f, 0.0f)
 								gaze.confidence < 0.85f && gaze.confidence > confidenceThreshold -> referenceTarget.material.diffuse = GLVector(0.0f, 0.3f, 0.3f)
@@ -477,8 +486,11 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 							}
 
 							if (gaze.confidence > confidenceThreshold) {
+								val p = gaze.gazePoint()
 								referenceTarget.visible = true
-								referenceTarget.position = cam.headPosition + gaze.gazePoint()
+								// Pupil has mm units, so we divide by 1000 here to get to scenery units
+								referenceTarget.position = p
+								(cam.children.find { it.name == "debugBoard" } as? TextBoard)?.text = "${String.format("%.2f", p.x())}, ${String.format("%.2f", p.y())}, ${String.format("%.2f", p.z())}"
 							}
 						}
 					}
