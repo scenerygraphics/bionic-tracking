@@ -35,17 +35,21 @@ import kotlin.math.PI
 class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 	val pupilTracker = PupilEyeTracker(calibrationType = PupilEyeTracker.CalibrationType.WorldSpace, port = System.getProperty("PupilPort", "50020").toInt())
 	val hmd = OpenVRHMD(seated = false, useCompositor = true)
-	val referenceTarget = Icosphere(0.02f, 2)
+	val referenceTarget = Icosphere(0.004f, 2)
+	val calibrationTarget = Icosphere(0.02f, 2)
 	val laser = Cylinder(0.005f, 0.2f, 10)
 
 	val hedgehogs = Mesh()
+	enum class HedgehogVisibility { Hidden, PerTimePoint, Visible }
+	var hedgehogVisibility = HedgehogVisibility.Hidden
+
 	lateinit var volume: Volume
 
 	val confidenceThreshold = 0.60f
 
-	var tracking = false
+	@Volatile var tracking = false
 	var playing = false
-	var delay = 125L
+	var volumesPerSecond = 4
 	var skipToNext = false
 	var skipToPrevious = false
 	var currentVolume = 0
@@ -94,6 +98,15 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 		referenceTarget.material.diffuse = GLVector(0.8f, 0.8f, 0.8f)
 		cam.addChild(referenceTarget)
 
+//		calibrationTarget.readFromOBJ(BionicTracking::class.java.getResource("StanfordBunny.obj").file)
+//		calibrationTarget.scale = GLVector(0.3f, 0.3f, 0.3f)
+		calibrationTarget.visible = false
+		calibrationTarget.material.roughness = 1.0f
+		calibrationTarget.material.metallic = 0.0f
+		calibrationTarget.material.diffuse = GLVector(1.0f, 1.0f, 1.0f)
+		calibrationTarget.runRecursive { it.material.diffuse = GLVector(1.0f, 1.0f, 1.0f) }
+		cam.addChild(calibrationTarget)
+
 		laser.visible = false
 		laser.material.diffuse = GLVector(1.0f, 1.0f, 1.0f)
 		scene.addChild(laser)
@@ -127,6 +140,7 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 
 		val bb = BoundingGrid()
 		bb.node = volume
+		bb.visible = false
 
 		scene.addChild(hedgehogs)
 
@@ -202,6 +216,7 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 
 			while(running) {
 				if(playing || skipToNext || skipToPrevious) {
+					val oldTimepoint = currentVolume
 					val newVolume = if(skipToNext || playing) {
 						skipToNext = false
 						nextVolume()
@@ -209,6 +224,7 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 						skipToPrevious = false
 						previousVolume()
 					}
+					val newTimepoint = currentVolume
 
 					logger.debug("Loading volume $newVolume")
 					if(newVolume.toLowerCase().endsWith("raw")) {
@@ -218,17 +234,31 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 					}
 
 					if(hedgehogs.visible) {
-						hedgehogs.children.forEach { hedgehog ->
-							hedgehog.instances.forEach {
-								it.visible = (it.metadata["spine"] as SpineMetadata).timepoint == currentVolume
+						if(hedgehogVisibility == HedgehogVisibility.PerTimePoint) {
+							hedgehogs.children.forEach { hedgehog ->
+								hedgehog.instances.forEach {
+									it.visible = (it.metadata["spine"] as SpineMetadata).timepoint == currentVolume
+								}
+							}
+						} else {
+							hedgehogs.children.forEach { hedgehog ->
+								hedgehog.instances.forEach { it.visible = true }
 							}
 						}
 					}
 
 					volume.trangemax = 1500.0f
+
+					if(tracking && oldTimepoint == (volumes.size-1) && newTimepoint == 0) {
+						tracking = false
+
+						referenceTarget.material.diffuse = GLVector(0.5f, 0.5f, 0.5f)
+						cam.showMessage("Tracking deactivated.")
+						dumpHedgehog()
+					}
 				}
 
-				Thread.sleep(delay)
+				Thread.sleep((1000.0f/volumesPerSecond).toLong())
 			}
 		}
 	}
@@ -255,8 +285,6 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 		return volumes[currentVolume]
 	}
 
-	val messages = ArrayList<TextBoard>(5)
-
 	override fun inputSetup() {
 		val cam = scene.findObserver() ?: throw IllegalStateException("Could not find camera")
 
@@ -274,12 +302,26 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 		}
 
 		val toggleHedgehog = ClickBehaviour { _, _ ->
-			if(hedgehogs.visible) {
-				cam.showMessage("Hedgehog hidden")
-			} else {
-				cam.showMessage("Hedgehog visible")
+			val current = HedgehogVisibility.values().indexOf(hedgehogVisibility)
+			hedgehogVisibility = HedgehogVisibility.values().get((current + 1) % 3)
+
+			when(hedgehogVisibility) {
+				HedgehogVisibility.Hidden -> {
+					hedgehogs.visible = false
+					hedgehogs.runRecursive { it.visible = false }
+					cam.showMessage("Hedgehogs hidden")
+				}
+
+				HedgehogVisibility.PerTimePoint -> {
+					hedgehogs.visible = true
+					cam.showMessage("Hedgehogs shown per timepoint")
+				}
+
+				HedgehogVisibility.Visible -> {
+					hedgehogs.visible = true
+					cam.showMessage("Hedgehogs visible")
+				}
 			}
-			hedgehogs.visible = !hedgehogs.visible
 		}
 
 		hmd.addBehaviour("toggle_hedgehog", toggleHedgehog)
@@ -298,11 +340,10 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 		hmd.addBehaviour("skip_to_prev", prevTimepoint)
 		hmd.addKeyBinding("skip_to_prev", "A")
 
-		val scaleFactor = 1.2f
 		val fasterOrScale = ClickBehaviour { _, _ ->
 			if(playing) {
-				delay = minOf((delay / scaleFactor).toLong(), 2000L)
-				cam.showMessage("Speed: ${String.format("%.2f", (1000f/delay.toFloat()))} vol/s")
+				volumesPerSecond = maxOf(minOf(volumesPerSecond+1, 20), 1)
+				cam.showMessage("Speed: $volumesPerSecond vol/s")
 			} else {
 				volumeScaleFactor = minOf(volumeScaleFactor * 1.2f, 3.0f)
 				volume.scale = GLVector.getOneVector(3) * volumeScaleFactor
@@ -314,8 +355,8 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 
 		val slowerOrScale = ClickBehaviour { _, _ ->
 			if(playing) {
-				delay = maxOf((delay * scaleFactor).toLong(), 5L)
-				cam.showMessage("Speed: ${String.format("%.2f", (1000f/delay.toFloat()))} vol/s")
+				volumesPerSecond = maxOf(minOf(volumesPerSecond-1, 20), 1)
+				cam.showMessage("Speed: $volumesPerSecond vol/s")
 			} else {
 				volumeScaleFactor = maxOf(volumeScaleFactor / 1.2f, 0.1f)
 				volume.scale = GLVector.getOneVector(3) * volumeScaleFactor
@@ -392,13 +433,17 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 				val cam = scene.findObserver() as? DetachedHeadCamera ?: return@thread
 				pupilTracker.gazeConfidenceThreshold = confidenceThreshold
 				if (!pupilTracker.isCalibrated) {
+					pupilTracker.onCalibrationInProgress = {
+						cam.showMessage("Calibration in progress ...", messageColor = GLVector(1.0f, 0.8f, 0.0f))
+					}
+
 					pupilTracker.onCalibrationFailed = {
 						cam.showMessage("Calibration failed.", messageColor = GLVector(1.0f, 0.0f, 0.0f))
 					}
 
 					pupilTracker.onCalibrationSuccess = {
 						cam.showMessage("Calibration succeeded!", messageColor = GLVector(0.0f, 1.0f, 0.0f))
-						cam.children.find { it.name == "debugBoard" }?.visible = true
+//						cam.children.find { it.name == "debugBoard" }?.visible = true
 
 						for (i in 0 until 20) {
 							referenceTarget.material.diffuse = GLVector(0.0f, 1.0f, 0.0f)
@@ -426,6 +471,7 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 						hmd.addKeyBinding("toggle_tracking", keybindingTracking)
 
 						volume.visible = true
+						volume.runRecursive { it.visible = true }
 						playing = true
 					}
 
@@ -445,14 +491,13 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 //					}
 
 					logger.info("Starting eye tracker calibration")
-					cam.showMessage("Look at the dot", duration = 1500)
+					cam.showMessage("Follow the white rabbit.", duration = 1500)
 					pupilTracker.calibrate(cam, hmd,
 							generateReferenceData = true,
-							calibrationTarget = referenceTarget)
+							calibrationTarget = calibrationTarget)
 
 					pupilTracker.onGazeReceived = when (pupilTracker.calibrationType) {
 						PupilEyeTracker.CalibrationType.ScreenSpace -> { gaze ->
-							logger.info("Received gaze: $gaze")
 							if (gaze.confidence > confidenceThreshold) {
 								referenceTarget.visible = true
 //								laser.visible = true
@@ -477,20 +522,21 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 						}
 
 						PupilEyeTracker.CalibrationType.WorldSpace -> { gaze ->
-//							logger.info("Received gaze: $gaze")
-							when {
-								gaze.confidence < confidenceThreshold -> referenceTarget.material.diffuse = GLVector(1.0f, 0.0f, 0.0f)
-								gaze.confidence < 0.85f && gaze.confidence > confidenceThreshold -> referenceTarget.material.diffuse = GLVector(0.0f, 0.3f, 0.3f)
-								gaze.confidence > 0.85f -> referenceTarget.material.diffuse = GLVector(0.0f, 0.5f, 0.5f)
-								gaze.confidence > 0.95f -> referenceTarget.material.diffuse = GLVector(0.0f, 1.0f, 0.0f)
-							}
-
 							if (gaze.confidence > confidenceThreshold) {
 								val p = gaze.gazePoint()
 								referenceTarget.visible = true
 								// Pupil has mm units, so we divide by 1000 here to get to scenery units
 								referenceTarget.position = p
 								(cam.children.find { it.name == "debugBoard" } as? TextBoard)?.text = "${String.format("%.2f", p.x())}, ${String.format("%.2f", p.y())}, ${String.format("%.2f", p.z())}"
+
+								val headCenter = cam.viewportToWorld(GLVector(0.0f, 0.0f))
+								val pointWorld = cam.world.mult(p.xyzw()).xyz()
+								val direction = (pointWorld - headCenter).normalize()
+
+								if(tracking) {
+									logger.debug("Starting spine from $headCenter to $pointWorld")
+									addSpine(headCenter, direction, volume, gaze.confidence, currentVolume)
+								}
 							}
 						}
 					}
