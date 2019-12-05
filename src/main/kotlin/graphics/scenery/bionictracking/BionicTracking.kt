@@ -9,6 +9,7 @@ import graphics.scenery.controls.OpenVRHMD
 import graphics.scenery.controls.eyetracking.PupilEyeTracker
 import graphics.scenery.controls.TrackedDeviceType
 import graphics.scenery.controls.TrackerRole
+import graphics.scenery.controls.behaviours.ControllerDrag
 import graphics.scenery.numerics.Random
 import graphics.scenery.utils.LazyLogger
 import graphics.scenery.utils.MaybeIntersects
@@ -387,45 +388,6 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 
 		setupCalibration()
 	}
-
-	class ControllerDrag(val handedness: TrackerRole, val hmd: OpenVRHMD, val draggedObjectFinder: () -> Node?): ClickBehaviour {
-		/**
-		 * A click occuered at the specified location, where click can mean a
-		 * regular mouse click or a typed key.
-		 *
-		 * @param x
-		 * mouse x.
-		 * @param y
-		 * mouse y.
-		 */
-		val logger by LazyLogger()
-		var lastPosition: GLVector? = null
-		// half a second of timeout
-		val timeout = 500000000
-
-		var lastTime = System.nanoTime()
-
-		override fun click(x : Int, y : Int) {
-			val currentTime = System.nanoTime()
-			if(currentTime - lastTime > timeout) {
-				lastPosition = null
-				lastTime = currentTime
-			}
-
-			val pose = hmd.getPose(TrackedDeviceType.Controller).find { it.role == handedness } ?: return
-			val last = lastPosition
-			val current = pose.position.clone()
-
-			if(last != null) {
-				val node = draggedObjectFinder.invoke() ?: return
-				node.position = node.position + (current - last)
-				logger.debug("Node ${node.name} moved with $current - $last!")
-			}
-
-			lastPosition = current
-		}
-	}
-
 
 	private fun setupCalibration(keybindingCalibration: String = "N", keybindingTracking: String = "U") {
 		val startCalibration = ClickBehaviour { _, _ ->
