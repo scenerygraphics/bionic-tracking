@@ -434,7 +434,7 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 				pupilTracker.gazeConfidenceThreshold = confidenceThreshold
 				if (!pupilTracker.isCalibrated) {
 					pupilTracker.onCalibrationInProgress = {
-						cam.showMessage("Calibration in progress ...", messageColor = GLVector(1.0f, 0.8f, 0.0f))
+						cam.showMessage("Crunching equations ...", messageColor = GLVector(1.0f, 0.8f, 0.0f), duration = 15000)
 					}
 
 					pupilTracker.onCalibrationFailed = {
@@ -477,18 +477,6 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 
 					pupilTracker.unsubscribeFrames()
 					scene.removeChild("eyeFrames")
-
-//					if(pupilTracker.calibrationType == PupilEyeTracker.CalibrationType.WorldSpace) {
-//						referenceTarget.update.add {
-//							if(cam is DetachedHeadCamera) {
-////								referenceTarget.position = cam.headPosition + referenceTarget.position
-//								referenceTarget.rotation = cam.headOrientation.conjugate().normalize()
-//							} else {
-////								referenceTarget.position = cam.position + referenceTarget.position
-//								referenceTarget.rotation = cam.rotation.conjugate().normalize()
-//							}
-//						}
-//					}
 
 					logger.info("Starting eye tracker calibration")
 					cam.showMessage("Follow the white rabbit.", duration = 1500)
