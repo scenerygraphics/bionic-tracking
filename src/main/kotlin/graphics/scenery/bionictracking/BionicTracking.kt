@@ -565,7 +565,7 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 
 		logger.info("Written hedgehog to ${f.absolutePath}")
 
-		val h = HedgehogAnalysis(spines)
+		val h = HedgehogAnalysis(spines, volume.world.clone())
 		val track = h.run()
 
 		if(track == null) {

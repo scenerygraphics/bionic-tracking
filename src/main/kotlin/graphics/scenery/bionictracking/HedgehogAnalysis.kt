@@ -1,10 +1,13 @@
 package graphics.scenery.bionictracking
 
+import cleargl.GLMatrix
 import cleargl.GLVector
 import com.jogamp.opengl.math.Quaternion
 import graphics.scenery.utils.LazyLogger
 import org.slf4j.LoggerFactory
 import java.io.File
+import kotlin.math.abs
+import kotlin.math.pow
 import kotlin.math.sqrt
 
 /**
@@ -12,7 +15,7 @@ import kotlin.math.sqrt
  *
  * @author Ulrik Günther <hello@ulrik.is>
  */
-class HedgehogAnalysis(val spines: List<SpineMetadata>) {
+class HedgehogAnalysis(val spines: List<SpineMetadata>, val localToWorld: GLMatrix) {
     val logger by LazyLogger()
 
     val timepoints = LinkedHashMap<Int, ArrayList<SpineMetadata>>()
@@ -70,9 +73,9 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>) {
 								var next: SpineGraphVertex? = null) {
 
 		fun distance(): Float {
-			val prev = previous
-			return if(prev != null) {
-				(prev.worldPosition - this.worldPosition).magnitude()
+			val n = next
+			return if(n != null) {
+				(n.worldPosition - this.worldPosition).magnitude()
 			} else {
 				0.0f
 			}
@@ -87,6 +90,8 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>) {
 			return "SpineGraphVertex for t=$timepoint, pos=$position, worldPos=$worldPosition, value=$value ($metadata)"
 		}
 	}
+
+	fun Iterable<Float>.stddev() = sqrt((this.map { (it - this.average()) * (it - this.average()) }.sum() / this.count()))
 
 	fun GLVector.toQuaternion(forward: GLVector = GLVector(0.0f, 0.0f, -1.0f)): Quaternion {
 		val cross = forward.cross(this)
@@ -131,9 +136,11 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>) {
 
 				if(maxIndices.isNotEmpty()) {
 					maxIndices.map { index ->
-						val worldPosition = spine.position + spine.direction * spine.distance
+						val position = spine.localEntry + spine.localDirection * index.first.toFloat()
+						val worldPosition = localToWorld.mult((position * 2.0f - GLVector.getOneVector(3)).xyzw()).xyz()
+
 						SpineGraphVertex(tp.key,
-								spine.localEntry + spine.localDirection * index.first.toFloat(),
+								position,
 								worldPosition,
 								index.second,
 								spine)
@@ -171,20 +178,57 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>) {
 			} else {
 				null
 			}
+		}.toMutableList()
+
+		shortestPath.windowed(3, 1, partialWindows = true).forEach {
+			it.getOrNull(0)?.next = it.getOrNull(1)
+			it.getOrNull(1)?.previous = it.getOrNull(0)
+			it.getOrNull(1)?.next = it.getOrNull(2)
+			it.getOrNull(2)?.previous = it.getOrNull(1)
 		}
 
-		shortestPath.windowed(3, 1).forEach {
-			it[1].previous = it[0]
-			it[1].next = it[2]
-		}
+		var avgPathLength = shortestPath.map { it.distance() }.average().toFloat()
+		var stdDevPathLength = shortestPath.map { it.distance() }.stddev().toFloat()
+		logger.info("Average path length=$avgPathLength, stddev=$stdDevPathLength")
 
-		val avgPathLength = shortestPath.map { it.distance() }.average().toFloat()
-		logger.info("Average path length=$avgPathLength")
+		fun zScore(value: Float, m: Float, sd: Float) = (value - m)/sd
 
 		val beforeCount = shortestPath.size
-		while(shortestPath.any { it.distance() >= 2.0f * avgPathLength }) {
-			shortestPath.filter { it.distance() >= 2.0f * avgPathLength }.forEach { it.drop() }
-			shortestPath = shortestPath.filter { it.distance() < 2.0f * avgPathLength }
+		if(false) {
+			while (shortestPath.any { it.distance() >= 2.0f * avgPathLength }) {
+				shortestPath.filter { it.distance() >= 2.0f * avgPathLength }.forEach { it.drop() }
+				shortestPath = shortestPath.filter { it.distance() < 2.0f * avgPathLength }.toMutableList()
+			}
+		} else {
+			//		logger.info("Distances: ${shortestPath.joinToString { "${it.distance()}/${zScore(it.distance(), avgPathLength, stdDevPathLength)}"}}")
+			var remaining = shortestPath.count { zScore(it.distance(), avgPathLength, stdDevPathLength) > 2.0f }
+			while(remaining > 0) {
+				val outliers = shortestPath
+						.filter { zScore(it.distance(), avgPathLength, stdDevPathLength) > 2.0f }
+						.map {
+							val idx = shortestPath.indexOf(it)
+//						listOf(idx, idx+1)
+							listOf(idx-1, idx, idx+1)
+						}.flatten()
+
+				shortestPath = shortestPath.filterIndexed { index, _ -> index !in outliers }.toMutableList()
+				remaining = shortestPath.count { zScore(it.distance(), avgPathLength, stdDevPathLength) > 2.0f }
+//			indices.forEach {
+//				shortestPath.removeAt(it.second)
+//			}
+
+//			shortestPath = shortestPath.filter { zScore(it.distance(), avgPathLength, stdDevPathLength) <= 2.0f }
+				logger.info("Iterating: ${shortestPath.size} vertices remaining, with $remaining failing z-score criterion")
+				shortestPath.windowed(3, 1, partialWindows = true).forEach {
+					it.getOrNull(0)?.next = it.getOrNull(1)
+					it.getOrNull(1)?.previous = it.getOrNull(0)
+					it.getOrNull(1)?.next = it.getOrNull(2)
+					it.getOrNull(2)?.previous = it.getOrNull(1)
+				}
+
+//			avgPathLength = shortestPath.map { it.distance() }.average().toFloat()
+//			stdDevPathLength = shortestPath.map { it.distance() }.stddev().toFloat()
+			}
 		}
 		val afterCount = shortestPath.size
 		logger.info("Pruned ${beforeCount - afterCount} vertices due to path length")
@@ -194,7 +238,7 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>) {
 				.groupBy { it.timepoint }
 				.mapNotNull { vs -> vs.value.maxBy { it.metadata.confidence } }
 				.filter {
-					it.metadata.direction.times(it.previous!!.metadata.direction) > 0.85f
+					it.metadata.direction.times(it.previous!!.metadata.direction) > 0.5f
 				}
 
 
@@ -235,7 +279,7 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>) {
 				spines.add(currentSpine)
 			}
 
-			return HedgehogAnalysis(spines)
+			return HedgehogAnalysis(spines, GLMatrix.getIdentity())
 		}
 
 		private fun String.toGLVector(): GLVector {
@@ -297,7 +341,7 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>) {
 				spines.add(currentSpine)
 			}
 
-			return HedgehogAnalysis(spines)
+			return HedgehogAnalysis(spines, GLMatrix.getIdentity())
 		}
 	}
 }
