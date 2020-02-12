@@ -11,7 +11,6 @@ import graphics.scenery.controls.TrackedDeviceType
 import graphics.scenery.controls.TrackerRole
 import graphics.scenery.controls.behaviours.ControllerDrag
 import graphics.scenery.numerics.Random
-import graphics.scenery.utils.LazyLogger
 import graphics.scenery.utils.MaybeIntersects
 import graphics.scenery.utils.SystemHelpers
 import graphics.scenery.volumes.TransferFunction
@@ -25,6 +24,7 @@ import java.io.ByteArrayInputStream
 import java.io.File
 import java.nio.file.Paths
 import javax.imageio.ImageIO
+import kotlin.collections.ArrayList
 import kotlin.concurrent.thread
 import kotlin.math.PI
 
@@ -134,6 +134,7 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 		volume.voxelSizeY = 10.0f
 		volume.voxelSizeZ = 30.0f
 		volume.transferFunction = TransferFunction.ramp(0.05f, 0.8f)
+//		volume.transferFunction = TransferFunction.ramp(0.5f, 0.8f)
 		volume.metadata["animating"] = true
 		volume.trangemax = 1500.0f
 		volume.visible = false
@@ -384,6 +385,57 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 		hmd.addBehaviour("trigger_move", move)
 		hmd.addKeyBinding("trigger_move", "T")
 
+		val deleteLastHedgehog = object: ClickBehaviour {
+			/**
+			 * Whether the action is armed at the moment. Action becomes disarmed after [confirmationDuration].
+			 */
+			private var armed: Boolean = false
+
+			/**
+			 * Duration to wait for confirmation key press.
+			 */
+			val confirmationDuration = 3000
+
+			/**
+			 * A click occuered at the specified location, where click can mean a
+			 * regular mouse click or a typed key.
+			 *
+			 * @param x
+			 * mouse x.
+			 * @param y
+			 * mouse y.
+			 */
+			override fun click(x : Int, y : Int) {
+				if(!armed) {
+					cam.showMessage("Deleting last track, press again to confirm.",
+							messageColor = GLVector(1.0f, 1.0f, 1.0f, 1.0f),
+							backgroundColor = GLVector(1.0f, 0.2f, 0.2f, 1.0f),
+							duration = confirmationDuration)
+
+					armed = true
+
+					thread {
+						Thread.sleep(confirmationDuration.toLong())
+						armed = false
+					}
+				} else {
+					hedgehogs.children.removeAt(hedgehogs.children.size-1)
+					volume.children.last { it.name.startsWith("Track-") }?.let { lastTrack ->
+						volume.removeChild(lastTrack)
+					}
+
+					cam.showMessage("Last track deleted.",
+							messageColor = GLVector(1.0f, 0.2f, 0.2f, 1.0f),
+							backgroundColor = GLVector(1.0f, 1.0f, 1.0f, 1.0f),
+							duration = 1000)
+
+				}
+			}
+		}
+
+		hmd.addBehaviour("delete_hedgehog", deleteLastHedgehog)
+		hmd.addKeyBinding("delete_hedgehog", "Y")
+
 		hmd.allowRepeats += OpenVRHMD.OpenVRButton.Trigger to TrackerRole.LeftHand
 
 		setupCalibration()
@@ -583,6 +635,7 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 		master.material.metallic = 0.0f
 		master.material.cullingMode = Material.CullingMode.None
 		master.instancedProperties["ModelMatrix"] = { master.world }
+		master.name = "Track-" + volume.children.count { it.name.startsWith("Track-") }
 
 		track.points.windowed(2, 1).forEach { pair ->
 			val element = Mesh()
