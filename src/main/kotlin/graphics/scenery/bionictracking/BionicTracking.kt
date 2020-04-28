@@ -9,6 +9,7 @@ import graphics.scenery.controls.OpenVRHMD
 import graphics.scenery.controls.eyetracking.PupilEyeTracker
 import graphics.scenery.controls.TrackedDeviceType
 import graphics.scenery.controls.TrackerRole
+import graphics.scenery.controls.behaviours.ConfirmableClickBehaviour
 import graphics.scenery.controls.behaviours.ControllerDrag
 import graphics.scenery.numerics.Random
 import graphics.scenery.utils.MaybeIntersects
@@ -20,9 +21,14 @@ import org.scijava.ui.UIService
 import org.scijava.ui.behaviour.ClickBehaviour
 import org.scijava.widget.FileWidget
 import java.awt.image.DataBufferByte
+import java.io.BufferedWriter
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.FileWriter
+import java.nio.file.Files
+import java.nio.file.Path
 import java.nio.file.Paths
+import java.util.concurrent.atomic.AtomicInteger
 import javax.imageio.ImageIO
 import kotlin.collections.ArrayList
 import kotlin.concurrent.thread
@@ -40,6 +46,9 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 	val calibrationTarget = Icosphere(0.02f, 2)
 	val laser = Cylinder(0.005f, 0.2f, 10)
 
+	lateinit var sessionId: String
+	lateinit var sessionDirectory: Path
+
 	val hedgehogs = Mesh()
 	enum class HedgehogVisibility { Hidden, PerTimePoint, Visible }
 	var hedgehogVisibility = HedgehogVisibility.Hidden
@@ -48,8 +57,14 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 
 	val confidenceThreshold = 0.60f
 
+	enum class PlaybackDirection {
+		Forward,
+		Backward
+	}
+
 	@Volatile var tracking = false
 	var playing = false
+    var direction = PlaybackDirection.Forward
 	var volumesPerSecond = 4
 	var skipToNext = false
 	var skipToPrevious = false
@@ -76,6 +91,11 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 		}
 
 		logger.info("Loading dataset from ${files.first()}")
+
+		val directory = Paths.get(files.first())
+		val datasetName = directory.fileName.toString()
+		sessionId = "BionicTracking-$datasetName-${SystemHelpers.formatDateTime()}"
+		sessionDirectory = Files.createDirectory(Paths.get(System.getProperty("user.home"), "Desktop", sessionId))
 
 		hub.add(SceneryElement.HMDInput, hmd)
 		renderer = Renderer.createRenderer(hub, applicationName, scene, windowWidth, windowHeight)
@@ -123,7 +143,11 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 
 		val folder = File(files.first())
 		val stackfiles = folder.listFiles()
-		volumes = stackfiles.filter { it.isFile && it.name.toLowerCase().endsWith("raw") || it.name.substringAfterLast(".").toLowerCase().startsWith("tif") }.map { it.absolutePath }.sorted()
+		volumes = stackfiles
+				.filter { it.isFile && it.name.toLowerCase().endsWith("raw") || it.name.substringAfterLast(".").toLowerCase().startsWith("tif") }
+				.map { it.absolutePath }
+				.sorted()
+				.reversed()
 		logger.info("Found volumes: ${volumes.joinToString(", ")}")
 
 		volume = Volume()
@@ -221,10 +245,18 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 					val oldTimepoint = currentVolume
 					val newVolume = if(skipToNext || playing) {
 						skipToNext = false
-						nextVolume()
+                        if(direction == PlaybackDirection.Forward) {
+							nextVolume()
+						} else {
+							previousVolume()
+						}
 					} else {
 						skipToPrevious = false
-						previousVolume()
+						if(direction == PlaybackDirection.Forward) {
+							previousVolume()
+						} else {
+							nextVolume()
+						}
 					}
 					val newTimepoint = currentVolume
 
@@ -326,9 +358,6 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 			}
 		}
 
-		hmd.addBehaviour("toggle_hedgehog", toggleHedgehog)
-		hmd.addKeyBinding("toggle_hedgehog", "X")
-
 		val nextTimepoint = ClickBehaviour { _, _ ->
 			skipToNext = true
 		}
@@ -336,11 +365,6 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 		val prevTimepoint = ClickBehaviour { _, _ ->
 			skipToPrevious = true
 		}
-
-		hmd.addBehaviour("skip_to_next", nextTimepoint)
-		hmd.addKeyBinding("skip_to_next", "D")
-		hmd.addBehaviour("skip_to_prev", prevTimepoint)
-		hmd.addKeyBinding("skip_to_prev", "A")
 
 		val fasterOrScale = ClickBehaviour { _, _ ->
 			if(playing) {
@@ -352,9 +376,6 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 			}
 		}
 
-		hmd.addBehaviour("faster_or_scale", fasterOrScale)
-		hmd.addKeyBinding("faster_or_scale", "W")
-
 		val slowerOrScale = ClickBehaviour { _, _ ->
 			if(playing) {
 				volumesPerSecond = maxOf(minOf(volumesPerSecond-1, 20), 1)
@@ -365,9 +386,6 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 			}
 		}
 
-		hmd.addBehaviour("slower_or_scale", slowerOrScale)
-		hmd.addKeyBinding("slower_or_scale", "S")
-
 		val playPause = ClickBehaviour { _, _ ->
 			playing = !playing
 			if(playing) {
@@ -377,64 +395,70 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 			}
 		}
 
-		hmd.addBehaviour("play_pause", playPause)
-		hmd.addKeyBinding("play_pause", "M")
-
 		val move = ControllerDrag(TrackerRole.LeftHand, hmd) { volume }
 
-		hmd.addBehaviour("trigger_move", move)
-		hmd.addKeyBinding("trigger_move", "T")
-
-		val deleteLastHedgehog = object: ClickBehaviour {
-			/**
-			 * Whether the action is armed at the moment. Action becomes disarmed after [confirmationDuration].
-			 */
-			private var armed: Boolean = false
-
-			/**
-			 * Duration to wait for confirmation key press.
-			 */
-			val confirmationDuration = 3000
-
-			/**
-			 * A click occuered at the specified location, where click can mean a
-			 * regular mouse click or a typed key.
-			 *
-			 * @param x
-			 * mouse x.
-			 * @param y
-			 * mouse y.
-			 */
-			override fun click(x : Int, y : Int) {
-				if(!armed) {
+		val deleteLastHedgehog = ConfirmableClickBehaviour(
+				armedAction = { timeout ->
 					cam.showMessage("Deleting last track, press again to confirm.",
 							messageColor = GLVector(1.0f, 1.0f, 1.0f, 1.0f),
 							backgroundColor = GLVector(1.0f, 0.2f, 0.2f, 1.0f),
-							duration = confirmationDuration)
+							duration = timeout.toInt())
 
-					armed = true
-
-					thread {
-						Thread.sleep(confirmationDuration.toLong())
-						armed = false
-					}
-				} else {
+				},
+				confirmAction = {
 					hedgehogs.children.removeAt(hedgehogs.children.size-1)
 					volume.children.last { it.name.startsWith("Track-") }?.let { lastTrack ->
 						volume.removeChild(lastTrack)
 					}
 
+					val hedgehogId = hedgehogIds.get()
+					val hedgehogFile = sessionDirectory.resolve("Hedgehog_${hedgehogId}_${SystemHelpers.formatDateTime()}.csv").toFile()
+					val hedgehogFileWriter = BufferedWriter(FileWriter(hedgehogFile, true))
+					hedgehogFileWriter.newLine()
+					hedgehogFileWriter.newLine()
+					hedgehogFileWriter.write("# WARNING: TRACK $hedgehogId IS INVALID\n")
+					hedgehogFileWriter.close()
+
 					cam.showMessage("Last track deleted.",
 							messageColor = GLVector(1.0f, 0.2f, 0.2f, 1.0f),
 							backgroundColor = GLVector(1.0f, 1.0f, 1.0f, 1.0f),
 							duration = 1000)
+				})
 
-				}
+		hmd.addBehaviour("playback_direction", ClickBehaviour { _, _ ->
+			direction = if(direction == PlaybackDirection.Forward) {
+				PlaybackDirection.Backward
+			} else {
+				PlaybackDirection.Forward
 			}
+			cam.showMessage("Playing: ${direction}")
+		})
+
+		val cellDivision = ClickBehaviour { _, _ ->
+			cam.showMessage("Adding cell division", duration = 1000)
+			dumpHedgehog()
+			addHedgehog(hedgehogs)
 		}
 
+		hmd.addBehaviour("skip_to_next", nextTimepoint)
+		hmd.addBehaviour("skip_to_prev", prevTimepoint)
+		hmd.addBehaviour("faster_or_scale", fasterOrScale)
+		hmd.addBehaviour("slower_or_scale", slowerOrScale)
+		hmd.addBehaviour("play_pause", playPause)
+		hmd.addBehaviour("toggle_hedgehog", toggleHedgehog)
+		hmd.addBehaviour("trigger_move", move)
 		hmd.addBehaviour("delete_hedgehog", deleteLastHedgehog)
+		hmd.addBehaviour("cell_division", cellDivision)
+
+		hmd.addKeyBinding("toggle_hedgehog", "X")
 		hmd.addKeyBinding("delete_hedgehog", "Y")
+		hmd.addKeyBinding("skip_to_next", "D")
+		hmd.addKeyBinding("skip_to_prev", "A")
+		hmd.addKeyBinding("faster_or_scale", "W")
+		hmd.addKeyBinding("slower_or_scale", "S")
+		hmd.addKeyBinding("play_pause", "M")
+		hmd.addKeyBinding("playback_direction", "N")
+		hmd.addKeyBinding("cell_division", "T")
 
 		hmd.allowRepeats += OpenVRHMD.OpenVRButton.Trigger to TrackerRole.LeftHand
 
@@ -601,24 +625,46 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 		}
 	}
 
-	fun dumpHedgehog() {
-		val f = File(System.getProperty("user.home") + "/Desktop/Hedgehog_${SystemHelpers.formatDateTime()}.csv")
-		val writer = f.bufferedWriter()
-		writer.write("Timepoint,Origin,Direction,LocalEntry,LocalExit,LocalDirection,HeadPosition,HeadOrientation,Position,Confidence,Samples\n")
+	val hedgehogIds = AtomicInteger(0)
+	/**
+	 * Dumps a given hedgehog including created tracks to a file.
+	 * If [hedgehog] is null, the last created hedgehog will be used, otherwise the given one.
+	 * If [hedgehog] is not null, the cell track will not be added to the scene.
+	 */
+	fun dumpHedgehog(hedgehog: Node? = null) {
+		val lastHedgehog = hedgehog ?: hedgehogs.children.last()
+        val hedgehogId = hedgehogIds.incrementAndGet()
 
-		val spines = hedgehogs.children.last().instances.mapNotNull { spine ->
+		val hedgehogFile = sessionDirectory.resolve("Hedgehog_${hedgehogId}_${SystemHelpers.formatDateTime()}.csv").toFile()
+		val hedgehogFileWriter = hedgehogFile.bufferedWriter()
+		hedgehogFileWriter.write("Timepoint,Origin,Direction,LocalEntry,LocalExit,LocalDirection,HeadPosition,HeadOrientation,Position,Confidence,Samples\n")
+
+		val trackFile = sessionDirectory.resolve("Tracks.tsv").toFile()
+		val trackFileWriter = BufferedWriter(FileWriter(trackFile, true))
+		if(!trackFile.exists()) {
+			trackFile.createNewFile()
+            trackFileWriter.write("# BionicTracking cell track listing for ${sessionDirectory.fileName}\n")
+			trackFileWriter.write("# TIME\tX\tYt\t\tZ\tTRACK_ID\tPARENT_TRACK_ID\tSPOT\tLABEL\n")
+		}
+
+		val spines = lastHedgehog.instances.mapNotNull { spine ->
 			spine.metadata["spine"] as? SpineMetadata
 		}
 
 		spines.forEach { metadata ->
-			writer.write("${metadata.timepoint};${metadata.origin};${metadata.direction};${metadata.localEntry};${metadata.localExit};${metadata.localDirection};${metadata.headPosition};${metadata.headOrientation};${metadata.position};${metadata.position};${metadata.confidence};${metadata.samples.joinToString(";")}")
+			hedgehogFileWriter.write("${metadata.timepoint};${metadata.origin};${metadata.direction};${metadata.localEntry};${metadata.localExit};${metadata.localDirection};${metadata.headPosition};${metadata.headOrientation};${metadata.position};${metadata.position};${metadata.confidence};${metadata.samples.joinToString(";")}\n")
 		}
-		writer.close()
+		hedgehogFileWriter.close()
 
-		logger.info("Written hedgehog to ${f.absolutePath}")
+		logger.info("Written hedgehog to ${hedgehogFile.absolutePath}")
 
-		val h = HedgehogAnalysis(spines, volume.world.clone())
-		val track = h.run()
+		val existingAnalysis = lastHedgehog.metadata["HedgehogAnalysis"] as? HedgehogAnalysis.Track
+		val track = if(existingAnalysis is HedgehogAnalysis.Track) {
+			existingAnalysis
+		} else {
+			val h = HedgehogAnalysis(spines, volume.world.clone())
+			h.run()
+		}
 
 		if(track == null) {
 			logger.warn("No track returned")
@@ -626,26 +672,48 @@ class BionicTracking: SceneryBase("BionicTracking", 1280, 720) {
 			return
 		}
 
+		lastHedgehog.metadata["HedgehogAnalysis"] = track
+		lastHedgehog.metadata["Spines"] = spines
+
 		logger.info("---\nTrack: ${track.points.joinToString("\n")}\n---")
 
-		val master = Cylinder(0.005f, 1.0f, 10)
-		master.material = ShaderMaterial.fromFiles("DefaultDeferredInstanced.vert", "DefaultDeferred.frag")
-		master.material.diffuse = Random.randomVectorFromRange(3, 0.2f, 0.8f)
-		master.material.roughness = 1.0f
-		master.material.metallic = 0.0f
-		master.material.cullingMode = Material.CullingMode.None
-		master.instancedProperties["ModelMatrix"] = { master.world }
-		master.name = "Track-" + volume.children.count { it.name.startsWith("Track-") }
-
-		track.points.windowed(2, 1).forEach { pair ->
-			val element = Mesh()
-			element.orientBetweenPoints(pair[0].first, pair[1].first, rescale = true, reposition = true)
-			element.parent = volume
-			element.instancedProperties["ModelMatrix"] = { element.world }
-			master.instances.add(element)
+		val master = if(hedgehog == null) {
+			val m = Cylinder(0.005f, 1.0f, 10)
+			m.material = ShaderMaterial.fromFiles("DefaultDeferredInstanced.vert", "DefaultDeferred.frag")
+			m.material.diffuse = Random.randomVectorFromRange(3, 0.2f, 0.8f)
+			m.material.roughness = 1.0f
+			m.material.metallic = 0.0f
+			m.material.cullingMode = Material.CullingMode.None
+			m.instancedProperties["ModelMatrix"] = { m.world }
+			m.name = "Track-$hedgehogId"
+            m
+		} else {
+			null
 		}
 
-		volume.addChild(master)
+		val parentId = 0
+		val volumeDimensions = GLVector(volume.sizeX.toFloat(), volume.sizeY.toFloat(), volume.sizeZ.toFloat())
+
+		trackFileWriter.newLine()
+		trackFileWriter.newLine()
+		trackFileWriter.write("# START OF TRACK $hedgehogId, child of $parentId\n")
+		track.points.windowed(2, 1).forEach { pair ->
+			if(master != null) {
+				val element = Mesh()
+				element.orientBetweenPoints(pair[0].first, pair[1].first, rescale = true, reposition = true)
+				element.parent = volume
+				element.instancedProperties["ModelMatrix"] = { element.world }
+				master.instances.add(element)
+			}
+
+			val p = pair[0].first.hadamard(volumeDimensions)
+			val tp = pair[0].second.timepoint
+			trackFileWriter.write("$tp\t${p.x()}\t${p.y()}\t${p.z()}\t${hedgehogId}\t$parentId\t0\t0\n")
+		}
+
+		master?.let { volume.addChild(it) }
+
+		trackFileWriter.close()
 	}
 }
 
