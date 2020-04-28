@@ -18,7 +18,7 @@
         <dependency>
             <groupId>graphics.scenery</groupId>
             <artifactId>scenery</artifactId>
-            <version>4e15ffb</version>
+            <version>20484e31</version>
         </dependency>
 
 		<dependency>
