@@ -35,10 +35,13 @@ import net.imglib2.img.array.ArrayImgs
 import net.imglib2.img.display.imagej.ImageJFunctions
 import net.imglib2.type.numeric.integer.UnsignedShortType
 import java.io.*
+import java.lang.Integer.max
+import java.lang.Integer.min
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.util.*
+import kotlin.collections.HashSet
 
 /**
  * Convert a mastodon track file into a directory of tiffs for comparison with Vlado's measure
@@ -66,6 +69,10 @@ class CreateCellTrackingChallengeTiff {
         val trackNodes = ArrayList<Array<Any>>()
         val pos = LongArray(4)
 
+        val maxTimePerTrack = HashMap<Int, Int>()
+        val minTimePerTrack = HashMap<Int, Int>()
+        val parentPerTrack = HashMap<Int, Int>()
+
         reader.lines().forEach { line ->
             // Skip comments
             if (line!!.startsWith("#")) {
@@ -84,6 +91,18 @@ class CreateCellTrackingChallengeTiff {
                 val spotLabel = parts[6]
                 val r = arrayOf<Any>(time, x, y, z, trackId, parentTrackId, spotLabel)
                 trackNodes.add(r)
+
+                maxTimePerTrack[trackId] = if( maxTimePerTrack.contains(trackId) )
+                    max(maxTimePerTrack[trackId]!!, time )
+                else
+                    time
+
+                minTimePerTrack[trackId] = if( minTimePerTrack.contains(trackId) )
+                    min(minTimePerTrack[trackId]!!, time )
+                else
+                    time
+
+                parentPerTrack[trackId] = parentTrackId
 
 //                pos[0] = Math.round(x);
 //                pos[1] = Math.round(y);
@@ -128,12 +147,27 @@ class CreateCellTrackingChallengeTiff {
             //ImagePlus imp = ImageJFunctions.wrap(Views.hyperSlice(output, 3, t), "timestep_" + t);
             IJ.saveAsTiff(imp, outDirectory.fileName.toString() + "/output_${String.format("%05d", t)}.tif")
         }
+
+        val writer = BufferedWriter(FileWriter(outDirectory.fileName.toString() + "/res_track.txt"))
+
+        for( trackId in maxTimePerTrack.keys ){
+            val TPfrom = minTimePerTrack[trackId]
+            val TPtill = maxTimePerTrack[trackId]
+            val parentTrackID = parentPerTrack[trackId]
+
+            val s = "$trackId $TPfrom $TPtill $parentTrackID\n"
+
+            writer.write(s)
+        }
+
+        writer.close()
     }
 
     companion object {
         @JvmStatic
         fun main(args: Array<String>) {
-            val inputFile = args.getOrNull(1) ?: throw IllegalStateException("Need to give input file as argument!")
+            //val inputFile = args.getOrNull(1) ?: throw IllegalStateException("Need to give input file as argument!")
+            val inputFile = "/home/kharrington/Data/CellTrackingChallenge/VladoUlrikBT/with_reorganized_tree.txtExportedTracks.txt"
             val converter = CreateCellTrackingChallengeTiff()
             converter.run(Paths.get(inputFile))
         }
