@@ -1,9 +1,14 @@
 package graphics.scenery.bionictracking
 
-import cleargl.GLMatrix
-import cleargl.GLVector
-import com.jogamp.opengl.math.Quaternion
+import org.joml.Vector3f
+import org.joml.Vector4f
+import org.joml.Matrix4f
+//import com.jogamp.opengl.math.Quaternion
+import org.joml.Quaternionf
 import graphics.scenery.utils.LazyLogger
+import graphics.scenery.utils.extensions.minus
+import graphics.scenery.utils.extensions.xyz
+import graphics.scenery.utils.extensions.xyzw
 import org.slf4j.LoggerFactory
 import java.io.File
 import kotlin.math.abs
@@ -15,7 +20,7 @@ import kotlin.math.sqrt
  *
  * @author Ulrik Günther <hello@ulrik.is>
  */
-class HedgehogAnalysis(val spines: List<SpineMetadata>, val localToWorld: GLMatrix) {
+class HedgehogAnalysis(val spines: List<SpineMetadata>, val localToWorld: Matrix4f) {
     val logger by LazyLogger()
 
     val timepoints = LinkedHashMap<Int, ArrayList<SpineMetadata>>()
@@ -26,7 +31,7 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>, val localToWorld: GLMatr
         private set
 
     data class Track(
-            val points: List<Pair<GLVector, SpineGraphVertex>>,
+            val points: List<Pair<Vector3f, SpineGraphVertex>>,
             val confidence: Float
     )
 
@@ -65,8 +70,8 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>, val localToWorld: GLMatr
         }.filterNotNull()
 
 	data class SpineGraphVertex(val timepoint: Int,
-								val position: GLVector,
-								val worldPosition: GLVector,
+								val position: Vector3f,
+								val worldPosition: Vector3f,
 								val value: Float,
 								val metadata : SpineMetadata,
 								var previous: SpineGraphVertex? = null,
@@ -75,7 +80,8 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>, val localToWorld: GLMatr
 		fun distance(): Float {
 			val n = next
 			return if(n != null) {
-				(n.worldPosition - this.worldPosition).magnitude()
+				val t = (n.worldPosition - this.worldPosition)
+				sqrt(t.x*t.x+t.y*t.y+t.z*t.z)
 			} else {
 				0.0f
 			}
@@ -93,13 +99,13 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>, val localToWorld: GLMatr
 
 	fun Iterable<Float>.stddev() = sqrt((this.map { (it - this.average()) * (it - this.average()) }.sum() / this.count()))
 
-	fun GLVector.toQuaternion(forward: GLVector = GLVector(0.0f, 0.0f, -1.0f)): Quaternion {
+	fun Vector3f.toQuaternionf(forward: Vector3f = Vector3f(0.0f, 0.0f, -1.0f)): Quaternionf {
 		val cross = forward.cross(this)
-		val q = Quaternion(cross.x(), cross.y(), cross.z(), this.times(forward))
+		val q = Quaternionf(cross.x(), cross.y(), cross.z(), this.dot(forward))
 
 		val x = sqrt((q.w + sqrt(q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w)) / 2.0f)
 
-		return Quaternion(q.x/(2.0f * x), q.y/(2.0f * x), q.z/(2.0f * x), x)
+		return Quaternionf(q.x/(2.0f * x), q.y/(2.0f * x), q.z/(2.0f * x), x)
 	}
 
     fun run(): Track? {
@@ -136,8 +142,9 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>, val localToWorld: GLMatr
 
 				if(maxIndices.isNotEmpty()) {
 					maxIndices.map { index ->
-						val position = spine.localEntry + spine.localDirection * index.first.toFloat()
-						val worldPosition = localToWorld.mult((position * 2.0f - GLVector.getOneVector(3)).xyzw()).xyz()
+						val position = spine.localEntry.add(spine.localDirection).mul(index.first.toFloat())
+						val worldPosition = localToWorld.transform((position.mul(2.0f) - Vector3f(1.0f)).xyzw()).xyz()
+//						val worldPosition = localToWorld.mult((position * 2.0f - GLVector.getOneVector(3)).xyzw()).xyz()
 
 						SpineGraphVertex(tp.key,
 								position,
@@ -161,7 +168,8 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>, val localToWorld: GLMatr
 			val distances = vs
 					.filter { it.value > localMaxThreshold }
 					.map { vertex ->
-						val distance = (current.worldPosition - vertex.worldPosition).magnitude()
+						val t = current.worldPosition - vertex.worldPosition
+						val distance = sqrt(t.x*t.x+t.y*t.y+t.z*t.z)
 						vertex to distance
 					}
 					.sortedBy { it.second }
@@ -238,13 +246,13 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>, val localToWorld: GLMatr
 				.groupBy { it.timepoint }
 				.mapNotNull { vs -> vs.value.maxBy { it.metadata.confidence } }
 				.filter {
-					it.metadata.direction.times(it.previous!!.metadata.direction) > 0.5f
+					it.metadata.direction.dot(it.previous!!.metadata.direction) > 0.5f
 				}
 
 
 		logger.info("Returning ${singlePoints.size} points")
 
-        return Track(singlePoints.map { it.position * 2.0f - GLVector.getOneVector(3) to it }, avgConfidence)
+        return Track(singlePoints.map { it.position . mul (2.0f) - Vector3f(1.0f) to it }, avgConfidence)
     }
 
 	companion object {
@@ -264,25 +272,25 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>, val localToWorld: GLMatr
 
 				val currentSpine = SpineMetadata(
 						timepoint,
-						GLVector.getNullVector(3),
-						GLVector.getNullVector(3),
+						Vector3f(0.0f),
+						Vector3f(0.0f),
 						0.0f,
-						GLVector.getNullVector(3),
-						GLVector.getNullVector(3),
-						GLVector.getNullVector(3),
-						GLVector.getNullVector(3),
-						Quaternion(),
-						GLVector.getNullVector(3),
+						Vector3f(0.0f),
+						Vector3f(0.0f),
+						Vector3f(0.0f),
+						Vector3f(0.0f),
+						Quaternionf(),
+						Vector3f(0.0f),
 						confidence,
 						samples)
 
 				spines.add(currentSpine)
 			}
 
-			return HedgehogAnalysis(spines, GLMatrix.getIdentity())
+			return HedgehogAnalysis(spines, Matrix4f())
 		}
 
-		private fun String.toGLVector(): GLVector {
+		private fun String.toVector3f(): Vector3f {
 			val array = this
 					.trim()
 					.trimEnd()
@@ -290,10 +298,10 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>, val localToWorld: GLMatr
 					.split(",")
 					.map { it.trim().trimEnd().toFloat() }.toFloatArray()
 
-			return GLVector(*array)
+			return Vector3f(array[0],array[1],array[2])
 		}
 
-		private fun String.toQuaternion(): Quaternion {
+		private fun String.toQuaternionf(): Quaternionf {
 			val array = this
 					.trim()
 					.trimEnd()
@@ -301,7 +309,7 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>, val localToWorld: GLMatr
 					.split(",")
 					.map { it.trim().trimEnd().replace("x ", "").replace("y ", "").replace("z ","").replace("w ", "").toFloat() }
 
-			return Quaternion(array[0], array[1], array[2], array[3])
+			return Quaternionf(array[0], array[1], array[2], array[3])
 		}
 
 		fun fromCSV(csv: File, separator: String = ";"): HedgehogAnalysis {
@@ -313,14 +321,14 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>, val localToWorld: GLMatr
 			lines.drop(1).forEach { line ->
 				val tokens = line.split(separator)
 				val timepoint = tokens[0].toInt()
-				val origin = tokens[1].toGLVector()
-				val direction = tokens[2].toGLVector()
-				val localEntry = tokens[3].toGLVector()
-				val localExit = tokens[4].toGLVector()
-				val localDirection = tokens[5].toGLVector()
-				val headPosition = tokens[6].toGLVector()
-				val headOrientation = tokens[7].toQuaternion()
-				val position = tokens[8].toGLVector()
+				val origin = tokens[1].toVector3f()
+				val direction = tokens[2].toVector3f()
+				val localEntry = tokens[3].toVector3f()
+				val localExit = tokens[4].toVector3f()
+				val localDirection = tokens[5].toVector3f()
+				val headPosition = tokens[6].toVector3f()
+				val headOrientation = tokens[7].toQuaternionf()
+				val position = tokens[8].toVector3f()
 				val confidence = tokens[9].toFloat()
 				val samples = tokens.subList(10, tokens.size - 1).map { it.toFloat() }
 
@@ -341,7 +349,7 @@ class HedgehogAnalysis(val spines: List<SpineMetadata>, val localToWorld: GLMatr
 				spines.add(currentSpine)
 			}
 
-			return HedgehogAnalysis(spines, GLMatrix.getIdentity())
+			return HedgehogAnalysis(spines, Matrix4f())
 		}
 	}
 }
