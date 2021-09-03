@@ -36,6 +36,7 @@ import java.nio.ByteBuffer
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.text.DecimalFormat
 import java.util.concurrent.atomic.AtomicInteger
 import javax.imageio.ImageIO
 import kotlin.collections.ArrayList
@@ -62,6 +63,8 @@ class BionicTracking: SceneryBase("BionicTracking", 640, 480) {
 	var hedgehogVisibility = HedgehogVisibility.Hidden
 
 	lateinit var volume: Volume
+	lateinit var point1:Icosphere
+	lateinit var point2:Icosphere
 
 	val confidenceThreshold = 0.60f
 
@@ -72,7 +75,7 @@ class BionicTracking: SceneryBase("BionicTracking", 640, 480) {
 
 	@Volatile var tracking = false
 	var playing = false
-    var direction = PlaybackDirection.Forward
+	var direction = PlaybackDirection.Forward
 	var volumesPerSecond = 4
 	var skipToNext = false
 	var skipToPrevious = false
@@ -80,18 +83,17 @@ class BionicTracking: SceneryBase("BionicTracking", 640, 480) {
 
 	var volumeScaleFactor = 1.0f
 
-
-
 	override fun init() {
 		val files = ArrayList<String>()
 		val fileFromProperty = System.getProperty("dataset")
 		if(fileFromProperty != null) {
 			files.add(fileFromProperty)
 		} else {
-			val c = Context()
-			val ui = c.getService(UIService::class.java)
-			val file = ui.chooseFile(null, FileWidget.DIRECTORY_STYLE)
-			files.add(file.absolutePath)
+//			val c = Context()
+//			val ui = c.getService(UIService::class.java)
+//			val file = ui.chooseFile(null, FileWidget.DIRECTORY_STYLE)
+//			files.add(file.absolutePath)
+			files.add("E:\\dataset\\Pdu_H2BeGFP_CAAXmCherry_0123_20130312_192018.corrected-histone")
 		}
 
 		if(files.size == 0) {
@@ -158,7 +160,6 @@ class BionicTracking: SceneryBase("BionicTracking", 640, 480) {
 		volume.colormap = Colormap.get("jet")
 		volume.scale = Vector3f(10.0f, 10.0f,30.0f)
 		volume.transferFunction = TransferFunction.ramp(0.05f, 0.8f)
-//		volume.transferFunction = TransferFunction.ramp(0.5f, 0.8f)
 		volume.metadata["animating"] = true
 		volume.converterSetups.firstOrNull()?.setDisplayRange(0.0, 1500.0)
 		volume.visible = false
@@ -175,17 +176,14 @@ class BionicTracking: SceneryBase("BionicTracking", 640, 480) {
 		val right = Box(Vector3f(1.0f, 1.0f, 0.001f))
 		left.position = Vector3f(-1.0f, 1.5f, 0.0f)
 		left.rotation = left.rotation.rotationZ(PI.toFloat())
-		//left.rotation = left.rotation.rotateByAngleZ(PI.toFloat())
 		right.position = Vector3f(1.0f, 1.5f, 0.0f)
 		eyeFrames.addChild(left)
 		eyeFrames.addChild(right)
-
 		scene.addChild(eyeFrames)
 
 		// limit frame rate for the frame publisher
 		val pupilFrameLimit = 20
 		var lastFrame = System.nanoTime()
-
 		pupilTracker.subscribeFrames { eye, texture ->
 			if(System.nanoTime() - lastFrame < pupilFrameLimit*10e5) {
 				return@subscribeFrames
@@ -196,7 +194,6 @@ class BionicTracking: SceneryBase("BionicTracking", 640, 480) {
 			} else {
 				right
 			}
-
 			val stream = ByteArrayInputStream(texture)
 			val image = ImageIO.read(stream)
 			val data = (image.raster.dataBuffer as DataBufferByte).data
@@ -207,7 +204,6 @@ class BionicTracking: SceneryBase("BionicTracking", 640, 480) {
 					UnsignedByteType(),
 					BufferUtils.allocateByteAndPut(data)
 			)
-
 			lastFrame = System.nanoTime()
 		}
 
@@ -241,27 +237,22 @@ class BionicTracking: SceneryBase("BionicTracking", 640, 480) {
 			while(running) {
 				if(playing || skipToNext || skipToPrevious) {
 					val oldTimepoint = volume.viewerState.currentTimepoint
-					val newVolume = if(skipToNext || playing) {
+					if(skipToNext || playing) {
 						skipToNext = false
-                        if(direction == PlaybackDirection.Forward) {
+						if(direction == PlaybackDirection.Forward) {
 							volume.nextTimepoint()
-//							nextVolume()
 						} else {
-//							previousVolume()
 							volume.previousTimepoint()
 						}
 					} else {
 						skipToPrevious = false
 						if(direction == PlaybackDirection.Forward) {
 							volume.previousTimepoint()
-//							previousVolume()
 						} else {
-//							nextVolume()
 							volume.nextTimepoint()
 						}
 					}
 					val newTimepoint = volume.viewerState.currentTimepoint
-
 
 					if(hedgehogs.visible) {
 						if(hedgehogVisibility == HedgehogVisibility.PerTimePoint) {
@@ -277,11 +268,8 @@ class BionicTracking: SceneryBase("BionicTracking", 640, 480) {
 						}
 					}
 
-
-
 					if(tracking && oldTimepoint == (volume.timepointCount-1) && newTimepoint == 0) {
 						tracking = false
-
 						referenceTarget.material.diffuse = Vector3f(0.5f, 0.5f, 0.5f)
 						cam.showMessage("Tracking deactivated.")
 						dumpHedgehog()
@@ -543,31 +531,30 @@ class BionicTracking: SceneryBase("BionicTracking", 640, 480) {
 
 
 	fun addSpine(center: Vector3f, direction: Vector3f, volume: Volume, confidence: Float, timepoint: Int) {
+
 		val cam = scene.findObserver() as? DetachedHeadCamera ?: return
 		val sphere = volume.boundingBox?.getBoundingSphere() ?: return
 
 		val sphereDirection = sphere.origin.minus(center)
-		val sphereDist = sqrt(sphereDirection.x*sphereDirection.x+sphereDirection.y*sphereDirection.y+sphereDirection.z*sphereDirection.z) - sphere.radius
-
+		val sphereDist = sqrt(sphereDirection.x*sphereDirection.x+sphereDirection.y*sphereDirection.y+sphereDirection.z*sphereDirection.z)
 		val p1 = center
-		val temp = direction.mul(sphereDist + 2.0f * sphere.radius)
+		val temp = direction.mul(sphereDist + sphere.radius)
 		val p2 = Vector3f(center).add(temp)
-//		val p2 = center + direction * (sphereDist + 2.0f * sphere.radius)
-		System.out.println(p1);
-		System.out.println(p2);
+
+
 		val spine = Cylinder.betweenPoints(p1, p2, 1.0f, segments = 1)
 		spine.visible = false
 
 		val intersection = volume.intersectAABB(p1, (p2 - p1).normalize())
-		System.out.println(intersection);
 		if(intersection is MaybeIntersects.Intersection) {
-			// get local entry and exit coordinates, and convert to UV coords
-			val localEntry = (intersection.relativeEntry .add(Vector3f(1.0f)) ) .mul (1.0f / 2.0f)
-			val localExit = (intersection.relativeExit .add (Vector3f(1.0f)) ).mul  (1.0f / 2.0f)
-			System.out.println(localEntry);
-			System.out.println(localExit);
-			val (samples, localDirection) = volume.sampleRay(localEntry, localExit) ?: null to null
 
+			// get local entry and exit coordinates, and convert to UV coords
+			val localEntry = (intersection.relativeEntry)// .add(Vector3f(1.0f)) ) .mul (1.0f / 2.0f)
+			val localExit = (intersection.relativeExit)// .add (Vector3f(1.0f)) ).mul  (1.0f / 2.0f)
+//			logger.info(localEntry.toString());
+//			logger.info(localExit.toString());
+			val (samples, localDirection) = volume.sampleRay(localEntry, localExit) ?: null to null
+//			logger.info(samples.toString());
 			if (samples != null && localDirection != null) {
 				val metadata = SpineMetadata(
 						timepoint,
@@ -602,7 +589,7 @@ class BionicTracking: SceneryBase("BionicTracking", 640, 480) {
 	 */
 	fun dumpHedgehog(hedgehog: Node? = null) {
 		val lastHedgehog = hedgehog ?: hedgehogs.children.last()
-        val hedgehogId = hedgehogIds.incrementAndGet()
+		val hedgehogId = hedgehogIds.incrementAndGet()
 
 		val hedgehogFile = sessionDirectory.resolve("Hedgehog_${hedgehogId}_${SystemHelpers.formatDateTime()}.csv").toFile()
 		val hedgehogFileWriter = hedgehogFile.bufferedWriter()
@@ -612,7 +599,7 @@ class BionicTracking: SceneryBase("BionicTracking", 640, 480) {
 		val trackFileWriter = BufferedWriter(FileWriter(trackFile, true))
 		if(!trackFile.exists()) {
 			trackFile.createNewFile()
-            trackFileWriter.write("# BionicTracking cell track listing for ${sessionDirectory.fileName}\n")
+			trackFileWriter.write("# BionicTracking cell track listing for ${sessionDirectory.fileName}\n")
 			trackFileWriter.write("# TIME\tX\tYt\t\tZ\tTRACK_ID\tPARENT_TRACK_ID\tSPOT\tLABEL\n")
 		}
 
@@ -621,7 +608,7 @@ class BionicTracking: SceneryBase("BionicTracking", 640, 480) {
 		}
 
 		spines.forEach { metadata ->
-			hedgehogFileWriter.write("${metadata.timepoint};${metadata.origin};${metadata.direction};${metadata.localEntry};${metadata.localExit};${metadata.localDirection};${metadata.headPosition};${metadata.headOrientation};${metadata.position};${metadata.position};${metadata.confidence};${metadata.samples.joinToString(";")}\n")
+			hedgehogFileWriter.write("${metadata.timepoint};${metadata.origin};${metadata.direction};${metadata.localEntry};${metadata.localExit};${metadata.localDirection};${metadata.headPosition};${metadata.headOrientation};${metadata.position};${metadata.confidence};${metadata.samples.joinToString(";")}\n")
 		}
 		hedgehogFileWriter.close()
 
@@ -631,7 +618,7 @@ class BionicTracking: SceneryBase("BionicTracking", 640, 480) {
 		val track = if(existingAnalysis is HedgehogAnalysis.Track) {
 			existingAnalysis
 		} else {
-			val h = HedgehogAnalysis(spines, Matrix4f(volume.world))
+			val h = HedgehogAnalysis(spines, Matrix4f(volume.world), Vector3f(volume.getDimensions()))
 			h.run()
 		}
 
@@ -647,7 +634,7 @@ class BionicTracking: SceneryBase("BionicTracking", 640, 480) {
 		logger.info("---\nTrack: ${track.points.joinToString("\n")}\n---")
 
 		val master = if(hedgehog == null) {
-			val m = Cylinder(0.005f, 1.0f, 10)
+			val m = Cylinder(3f, 1.0f, 10)
 			m.material = ShaderMaterial.fromFiles("DefaultDeferredInstanced.vert", "DefaultDeferred.frag")
 			m.material.diffuse = Random.random3DVectorFromRange(0.2f, 0.8f)
 			m.material.roughness = 1.0f
@@ -655,13 +642,13 @@ class BionicTracking: SceneryBase("BionicTracking", 640, 480) {
 			m.material.cullingMode = Material.CullingMode.None
 			m.instancedProperties["ModelMatrix"] = { m.world }
 			m.name = "Track-$hedgehogId"
-            m
+			m
 		} else {
 			null
 		}
 
 		val parentId = 0
-		val volumeDimensions = Vector3f(volume.viewerState.sources.firstOrNull()?.spimSource?.getSource(0,0)?.dimension(0)!!.toFloat(), volume.viewerState.sources.firstOrNull()?.spimSource?.getSource(0,0)?.dimension(1)!!.toFloat(), volume.viewerState.sources.firstOrNull()?.spimSource?.getSource(0,0)?.dimension(2)!!.toFloat())
+		val volumeDimensions = volume.getDimensions()
 
 		trackFileWriter.newLine()
 		trackFileWriter.newLine()
@@ -669,13 +656,13 @@ class BionicTracking: SceneryBase("BionicTracking", 640, 480) {
 		track.points.windowed(2, 1).forEach { pair ->
 			if(master != null) {
 				val element = Mesh()
-				element.orientBetweenPoints(pair[0].first, pair[1].first, rescale = true, reposition = true)
+				element.orientBetweenPoints(Vector3f(pair[0].first).mul(Vector3f(volumeDimensions)), Vector3f(pair[1].first).mul(Vector3f(volumeDimensions)), rescale = true, reposition = true)
 				element.parent = volume
 				element.instancedProperties["ModelMatrix"] = { element.world }
 				master.instances.add(element)
 			}
 
-			val p = Vector3f(pair[0].first).mul(volumeDimensions)//direct product
+			val p = Vector3f(pair[0].first).mul(Vector3f(volumeDimensions))//direct product
 			val tp = pair[0].second.timepoint
 			trackFileWriter.write("$tp\t${p.x()}\t${p.y()}\t${p.z()}\t${hedgehogId}\t$parentId\t0\t0\n")
 		}
